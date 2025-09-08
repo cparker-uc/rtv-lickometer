@@ -44,11 +44,12 @@ pub struct Config {
 
 impl Config {
     /// Initialize the configuration with a descriptive filename and default crop
-    pub fn new(roi_selected: bool) -> Self {
+    pub fn new() -> Self {
         // Default: Crop from 2028x1520 to 480x480 (centered in the frame)
         // This allows a bit of room for the user to configure the ROI
         let crop_x: u32 = 774;
         let crop_y: u32 = 520;
+        let roi_selected: bool = false;
 
         // Filename is required, starts empty
         let hostname = hostname::get()
@@ -60,20 +61,11 @@ impl Config {
 
         Self { filename, crop_x, crop_y, roi_selected }
     }
-}
 
-/// Prints the usage information when the user passes invalid args or the help flag
-fn print_help() {
-    println!("Usage: ./imx500-test [OPTIONS] </path/to/output>");
-    println!(
-        "Available options:
-
--h/--help   :   Print this help message
--c/--crop   :   Specify the crop rectangle as X,Y,W,H
-
-Examples:
-
-./imx500-test --help
-./imx500-test --crop=0,0,1920,1080 output.raw"
-                    );
+    /// Allow the user to set the crop
+    pub fn set_roi(&mut self, crop_x: u32, crop_y: u32) {
+        self.crop_x = crop_x;
+        self.crop_y = crop_y;
+        self.roi_selected = true;
+    }
 }

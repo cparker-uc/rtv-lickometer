@@ -21,7 +21,7 @@ use libcamera::{
     pixel_format::PixelFormat,
     properties::Model,
     request::{Request, RequestStatus, ReuseFlag},
-    stream::StreamRole,
+    stream::{StreamRole, Stream},
     utils::UniquePtr,
 };
 use libcamera_sys;
@@ -37,6 +37,7 @@ use std::{
     sync::mpsc::{
         channel, 
         Sender,
+        Receiver,
     },
     time::Duration,
 };
@@ -57,82 +58,8 @@ const CNN_KPI_INFO_ID: u32 = libcamera_sys::CNN_KPI_INFO as u32;
 // an enum variant for MJPEG, so we construct it manually from the raw fourcc identifier
 const PIXEL_FORMAT_YU12: PixelFormat = PixelFormat::new(u32::from_le_bytes([b'Y', b'U', b'1', b'2']), 0);
 
-/// Handles frame cropping
-fn crop_frame<'a>(mut planes: Vec<&'a [u8]>, y_stride: usize, user_conf: &Config) -> Vec<u8> {
-    let w: usize;
-    let h: usize;
-    if user_conf.roi_selected {
-        w = CROP_W as usize;
-        h = CROP_H as usize;
-    } else { // if we haven't selected the ROI yet, don't crop as far
-        w = FIRST_CROP_W as usize;
-        h = FIRST_CROP_H as usize;
-    }
-    // planes contains Y, U, and V planes. Y is double the height/width and stride
-    let y_plane = planes[0];
-    let u_plane = planes[1];
-    let v_plane = planes[2];
-
-    // Make sure the user-defined crop is an even number of pixels in both axes
-    let x: usize = (user_conf.crop_x & !1) as usize;
-    let y: usize = (user_conf.crop_y & !1) as usize;
-
-    // Define the UV coords (half the size)
-    let uvx: usize = x / 2;
-    let uvy: usize = y / 2;
-    let uvw: usize = w / 2;
-    let uvh: usize = h / 2;
-
-    // Length of each row in the planes
-    let uv_stride: usize = y_stride / 2;
-
-    // Determine new plane sizes
-    let y_size: usize = w * h;
-    let uv_size: usize = uvw * uvh;
-
-    // Output vector
-    let mut out: Vec<u8> = Vec::with_capacity(y_size + 2 * uv_size);
-
-    // Crop Y
-    for row in 0..h {
-        let row_start_idx = (y + row) * y_stride + x;
-        out.extend_from_slice(&y_plane[row_start_idx..row_start_idx + w]);
-    }
-
-    // Crop U & V
-    for row in 0..uvh {
-        let row_start_idx = (uvy + row) * uv_stride + uvx;
-        out.extend_from_slice(&u_plane[row_start_idx..row_start_idx + uvw]);
-    }
-    for row in 0..uvh {
-        let row_start_idx = (uvy + row) * uv_stride + uvx;
-        out.extend_from_slice(&v_plane[row_start_idx..row_start_idx + uvw]);
-    }
-    out
-}
-/// Returns a UniquePtr<ControlList> (pretty sure this is an abstraction of a concept from C)
-/// with the user-specified configs set
-fn global_config(_user_conf: &Config) -> UniquePtr<ControlList> {
-    let mut globals = ControlList::new();
-
-    // Unfortunately, with the IMX500, we are clamped to 30 fps :( This may be necessary
-    // with a different camera, so I'll leave it here for now.
-    // Set framerate (we have to tell it how many microseconds per frame, not a rate in Hz)
-    let target_fps = 30.0;
-    let frame_duration = (1_000_000.0 / target_fps) as i64;
-
-    globals.set(controls::FrameDurationLimits([frame_duration, frame_duration])).unwrap();
-
-    // Enable caching the input to CNN processing with IMX500 specific control
-    // (This just lets us read out CnnInputTensor after the request is complete.)
-    globals.set_raw(CNN_ENABLE_INPUT_TENSOR_ID, true.into()).unwrap();
-    //println!("{:#?}", globals.get_raw(CNN_ENABLE_INPUT_TENSOR_ID, )); // check if it set
-
-    globals
-}
-
 /// Open the IMX500 with V4L and write the CNN file to the NPU
-fn load_firmware(user_conf: &Config) -> Result<(), Box<dyn Error>> {
+pub fn load_firmware(user_conf: &Config) -> Result<(), Box<dyn Error>> {
     // Loop through the /dev directory and check the devices
     let mut dev_dir = fs::read_dir(&Path::new("/dev/"))?;
     let mut subdev_num: usize = 0;
@@ -176,67 +103,8 @@ fn load_firmware(user_conf: &Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Read imx500-specific controls by the raw ID (since these are
-/// not generated automatically as actual controls in libcamera-rs)
-fn read_imx500_tensor_by_id(req: &Request) -> Option<Vec<f32>> {
-    let md = req.metadata();
-    let md_iter = md.into_iter(); 
-    for (id, val) in md_iter {
-        match id {
-            CNN_OUTPUT_INFO_ID => {
-                // Information about the shape and contents of the output tensor, I think
-                //println!("{:?}", val);
-            },
-            CNN_OUTPUT_ID => {
-                // The output tensor (which I believe is received as a slice of bytes)
-                //println!("Output tensor");
-            },
-            CNN_INPUT_INFO_ID => {
-                // Information about the shape and contents of the input tensor, I think
-                //println!("{:?}", val);
-            },
-            CNN_INPUT_ID => {
-                // The input tensor (only works if the enable input tensor control is set)
-                // Currently returning this one to the request callback, but that will change
-                // to the output tensor once debugging and whatnot is finished.
-                if let ControlValue::Byte(bytes) = val {
-                    if bytes.len() % 4 == 0 { // make sure value is 32 bit
-                        let floats: Vec<f32> =
-                            // split the bytes into 4 chunks of 4 and map each to f32
-                            bytes.chunks_exact(4) 
-                                .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
-                                .collect();
-                        return Some(floats);
-                    }
-                }
-            },
-            CNN_KPI_INFO_ID => {
-                // Information about NPU performance (processing time, etc.)
-                //println!("{:#?}", val);
-            },
-            _ => {
-                //println!("Something other than input or output tensors");
-            }
-        };
-    }
-    None
-}
-
-/// Common initialization elements between stream/record. We need to carry
-/// over the CameraManager and whatnot, or libcamera will error
-fn initialize(user_conf: Config)
-/// Set camera configuration based on user_conf, allocate memory,
-/// and stream to the GUI for ROI selection
-pub fn stream(user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>) {
-    // Load firmware with V4L2 into IMX500 (the CNN rpk file)
-    match load_firmware(&user_conf) {
-        Ok(_) => println!("IMX500 finished loading CNN"),
-        Err(_e) => {
-            eprintln!("Couldn't load CNN into IMX500!");
-            std::process::exit(1);
-        },
-    }
-
+/// Stream to the egui GUI for ROI selection
+pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_r: Receiver<(u32, u32)>) -> (u32, u32) {
     // Interface for choosing a camera
     let cm = CameraManager::new().unwrap();
 
@@ -336,9 +204,13 @@ pub fn stream(user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>) 
     for req in reqs {
         cam.queue_request(req).unwrap();
     }
-
     // Main loop, loops until user interrupt
-    loop {
+    while !user_conf.roi_selected {
+        // First, check if the user selected the ROI yet (try_recv so we don't block)
+        if let Ok((x,y)) = rx_r.try_recv() {
+            println!("ROI selection received: x: {x}, y: {y}");
+            user_conf.set_roi(x, y);
+        }
         // Check the channel for a message, timeout after 2 seconds
         let mut req = rx.recv_timeout(Duration::from_secs(2)).expect("Camera request failed");
 
@@ -357,38 +229,12 @@ pub fn stream(user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>) 
         req.reuse(ReuseFlag::REUSE_BUFFERS);
         cam.queue_request(req).unwrap();
     }
+    (user_conf.crop_x, user_conf.crop_y) // placeholder, need to determine how to send back the ROI selected
 }
+
 /// Set camera configuration based on user_conf, allocate memory,
 /// and record.
 pub fn record(user_conf: Config) {
-    // Firmware should still be loaded from the initial setup
-    // during ROI selection phase
-    // Load firmware with V4L2 into IMX500 (the CNN rpk file)
-    //match load_firmware(&user_conf) {
-        //Ok(_) => println!("IMX500 finished loading CNN"),
-        //Err(_e) => {
-            //eprintln!("Couldn't load CNN into IMX500!");
-            //std::process::exit(1);
-        //},
-    //}
-
-    // Set the IMX500 ROI (so that we crop instead of scaling before passing into
-    // the NPU).
-    match set_roi(&user_conf) {
-        Ok(_) => {
-            println!(
-                "IMX500 ROI set to x:{}, y:{}, w:{}, h:{}\n",
-                &user_conf.crop_x,
-                &user_conf.crop_y,
-                CROP_W, CROP_H,
-            );
-        },
-        Err(_e) => {
-            eprintln!("Couldn't set IMX500 ROI!");
-            std::process::exit(1);
-        }
-    }
-
     // Interface for choosing a camera
     let cm = CameraManager::new().unwrap();
 
@@ -427,11 +273,6 @@ pub fn record(user_conf: Config) {
         CameraConfigurationStatus::Adjusted => println!("Camera config valid after adjustments: {cfgs:#?}\n"),
         CameraConfigurationStatus::Invalid => panic!("Error validating configuration\n"),
     }
-    //assert_eq!(
-        //cfgs.get(0).unwrap().get_pixel_format(),
-        //PIXEL_FORMAT_YU12,
-        //"Pixel format is not supported by the camera"
-    //);
     cam.configure(&mut cfgs).expect("Unable to configure camera");
 
     // -- ALLOCATE MEMORY --
@@ -445,7 +286,7 @@ pub fn record(user_conf: Config) {
     // CameraConfiguration, then access the underlying Stream object
     let cfg = &cfgs.get(0).unwrap();
     let stream = cfg.stream().unwrap();
-    //println!("{:#?}", &cfgs.get(0).unwrap().formats());
+
     // Determine stride of Y plane (should be padded a bit from 2028)
     let y_stride: u32 = cfg.get_stride();
 
@@ -480,6 +321,23 @@ pub fn record(user_conf: Config) {
             req
         })
         .collect::<Vec<_>>();
+
+    // Set the IMX500 ROI (so that we crop instead of scaling before passing into
+    // the NPU).
+    match set_roi(&user_conf) {
+        Ok(_) => {
+            println!(
+                "IMX500 ROI set to x:{}, y:{}, w:{}, h:{}\n",
+                &user_conf.crop_x,
+                &user_conf.crop_y,
+                CROP_W, CROP_H,
+            );
+        },
+        Err(_e) => {
+            eprintln!("Couldn't set IMX500 ROI!");
+            std::process::exit(1);
+        }
+    }
 
     // Multiple producer single consumer channel for communication with the recording thread
     let (tx, rx) = channel();
@@ -533,6 +391,128 @@ pub fn record(user_conf: Config) {
     }
     drop(writer);
     ffmpeg_proc.wait().expect("Couldn't wrap up ffmpeg");
+}
+
+/// Returns a UniquePtr<ControlList> (pretty sure this is an abstraction of a concept from C)
+/// with the user-specified configs set
+fn global_config(_user_conf: &Config) -> UniquePtr<ControlList> {
+    let mut globals = ControlList::new();
+
+    // Unfortunately, with the IMX500, we are clamped to 30 fps :( This may be necessary
+    // with a different camera, so I'll leave it here for now.
+    // Set framerate (we have to tell it how many microseconds per frame, not a rate in Hz)
+    let target_fps = 30.0;
+    let frame_duration = (1_000_000.0 / target_fps) as i64;
+
+    globals.set(controls::FrameDurationLimits([frame_duration, frame_duration])).unwrap();
+
+    // Enable caching the input to CNN processing with IMX500 specific control
+    // (This just lets us read out CnnInputTensor after the request is complete.)
+    globals.set_raw(CNN_ENABLE_INPUT_TENSOR_ID, true.into()).unwrap();
+    //println!("{:#?}", globals.get_raw(CNN_ENABLE_INPUT_TENSOR_ID, )); // check if it set
+
+    globals
+}
+
+/// Handles frame cropping (for saving or streaming). Needs y_stride from the original Y plane,
+/// so that we can account for the zero padding on left/right that the camera does
+fn crop_frame<'a>(mut planes: Vec<&'a [u8]>, y_stride: usize, user_conf: &Config) -> Vec<u8> {
+    let w: usize;
+    let h: usize;
+    if user_conf.roi_selected {
+        w = CROP_W as usize;
+        h = CROP_H as usize;
+    } else { // if we haven't selected the ROI yet, don't crop as far
+        w = FIRST_CROP_W as usize;
+        h = FIRST_CROP_H as usize;
+    }
+    // planes contains Y, U, and V planes. Y is double the height/width and stride
+    let y_plane = planes[0];
+    let u_plane = planes[1];
+    let v_plane = planes[2];
+
+    // Make sure the user-defined crop is an even number of pixels in both axes
+    let x: usize = (user_conf.crop_x & !1) as usize;
+    let y: usize = (user_conf.crop_y & !1) as usize;
+
+    // Define the UV coords (half the size)
+    let uvx: usize = x / 2;
+    let uvy: usize = y / 2;
+    let uvw: usize = w / 2;
+    let uvh: usize = h / 2;
+
+    // Length of each row in the planes
+    let uv_stride: usize = y_stride / 2;
+
+    // Determine new plane sizes
+    let y_size: usize = w * h;
+    let uv_size: usize = uvw * uvh;
+
+    // Output vector
+    let mut out: Vec<u8> = Vec::with_capacity(y_size + 2 * uv_size);
+
+    // Crop Y
+    for row in 0..h {
+        let row_start_idx = (y + row) * y_stride + x;
+        out.extend_from_slice(&y_plane[row_start_idx..row_start_idx + w]);
+    }
+
+    // Crop U & V
+    for row in 0..uvh {
+        let row_start_idx = (uvy + row) * uv_stride + uvx;
+        out.extend_from_slice(&u_plane[row_start_idx..row_start_idx + uvw]);
+    }
+    for row in 0..uvh {
+        let row_start_idx = (uvy + row) * uv_stride + uvx;
+        out.extend_from_slice(&v_plane[row_start_idx..row_start_idx + uvw]);
+    }
+    out
+}
+
+/// Read imx500-specific controls by the raw ID (since these are
+/// not generated automatically as actual controls in libcamera-rs)
+fn read_imx500_tensor_by_id(req: &Request) -> Option<Vec<f32>> {
+    let md = req.metadata();
+    let md_iter = md.into_iter(); 
+    for (id, val) in md_iter {
+        match id {
+            CNN_OUTPUT_INFO_ID => {
+                // Information about the shape and contents of the output tensor, I think
+                //println!("{:?}", val);
+            },
+            CNN_OUTPUT_ID => {
+                // The output tensor (which I believe is received as a slice of bytes)
+                //println!("Output tensor");
+            },
+            CNN_INPUT_INFO_ID => {
+                // Information about the shape and contents of the input tensor, I think
+                //println!("{:?}", val);
+            },
+            CNN_INPUT_ID => {
+                // The input tensor (only works if the enable input tensor control is set)
+                // Currently returning this one to the request callback, but that will change
+                // to the output tensor once debugging and whatnot is finished.
+                if let ControlValue::Byte(bytes) = val {
+                    if bytes.len() % 4 == 0 { // make sure value is 32 bit
+                        let floats: Vec<f32> =
+                            // split the bytes into 4 chunks of 4 and map each to f32
+                            bytes.chunks_exact(4) 
+                                .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+                                .collect();
+                        return Some(floats);
+                    }
+                }
+            },
+            CNN_KPI_INFO_ID => {
+                // Information about NPU performance (processing time, etc.)
+                //println!("{:#?}", val);
+            },
+            _ => {
+                //println!("Something other than input or output tensors");
+            }
+        };
+    }
+    None
 }
 
 /// Set custom region of interest for the NPU crop (so we don't just scale the

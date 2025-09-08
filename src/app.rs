@@ -1,11 +1,13 @@
 use crate::{
     // Constants
-    RAW_W, RAW_H, BYTES_PER_RAW_FRAME,
-    BYTES_PER_RAW_Y_PLANE, BYTES_PER_RAW_UV_PLANE,
+    //RAW_W, RAW_H, BYTES_PER_RAW_FRAME,
+    //BYTES_PER_RAW_Y_PLANE, BYTES_PER_RAW_UV_PLANE,
+    FIRST_CROP_W, FIRST_CROP_H,
+    BYTES_PER_FIRST_CROP_Y_PLANE,
+    BYTES_PER_FIRST_CROP_UV_PLANE,
+    BYTES_PER_FIRST_CROP_FRAME,
 };
-use crossbeam_channel::{
-    Receiver,
-};
+use crossbeam_channel;
 use eframe::egui::{
     self,
     ColorImage,
@@ -15,6 +17,7 @@ use eframe::egui::{
 use std::{
     cmp::max,
     error::Error,
+    sync::mpsc::Sender,
     time::{
         Duration,
         Instant,
@@ -56,18 +59,20 @@ impl Selection {
 /// This is where we set attributes to persist between loops
 pub struct GuiApp {
     pub selection: Selection,
-    rx: Receiver<Vec<u8>>,
+    rx: crossbeam_channel::Receiver<Vec<u8>>,
+    tx_r: Sender<(u32, u32)>, // for transmitting selected ROI back
     tex: Option<TextureHandle>,
     last_frame_at: Instant, // Track when the previous frame was captured
 }
 
 impl GuiApp {
-    pub fn new(ctx: &eframe::CreationContext, rx: Receiver<Vec<u8>>) -> Self {
+    pub fn new(ctx: &eframe::CreationContext, rx: crossbeam_channel::Receiver<Vec<u8>>, tx_r: Sender<(u32, u32)>) -> Self {
         Self {
             selection: Selection::default(),
             rx,
+            tx_r,
             tex: None,
-            last_frame_at: Instant::now() 
+            last_frame_at: Instant::now(),
         }
     }
 }
@@ -83,7 +88,7 @@ impl eframe::App for GuiApp {
 
         if let Some(pixels) = latest {
             // Create or update texture.
-            let size = [2028, 1520];
+            let size = [FIRST_CROP_W as usize, FIRST_CROP_H as usize];
             let image = ColorImage::from_rgba_unmultiplied(size, &pixels);
             if let Some(tex) = &mut self.tex {
                 tex.set(image, TextureOptions::default());
@@ -104,8 +109,8 @@ impl eframe::App for GuiApp {
                 // Fit while preserving aspect ratio.
                 let avail = ui.available_size();
                 // need to subtract the padding bytes from the width
-                let tex_size = egui::vec2(RAW_W as f32, RAW_H as f32);
-                let scale = (avail.x / tex_size.x).min(avail.y / tex_size.y).max(0.0);
+                let tex_size = egui::vec2(FIRST_CROP_W as f32, FIRST_CROP_H as f32);
+                //let scale = (avail.x / tex_size.x).min(avail.y / tex_size.y).max(0.0);
                 //let desired = tex_size * scale.max(1.0).min(8.0); // clamp zoom a bit
                 ui.image((tex.id(), tex.size_vec2()));
             } else {
@@ -126,23 +131,23 @@ fn convert_to_rgba(frame: Option<Vec<u8>>) -> Option<Vec<u8>> {
 
     let frame = frame.unwrap();
     let num_bytes = frame.len();
-    if num_bytes != BYTES_PER_RAW_FRAME {
+    if num_bytes != BYTES_PER_FIRST_CROP_FRAME {
         eprintln!("Received the wrong number of bytes while reading the video stream!");
-        eprintln!("{num_bytes} != {BYTES_PER_RAW_FRAME}");
+        eprintln!("{num_bytes} != {BYTES_PER_FIRST_CROP_FRAME}");
         return None
     }
 
     // Resolution information
-    let height: usize = RAW_H as usize;
-    let width: usize = RAW_W as usize;
-    let y_stride = width + 20; // Raw planes have 10px padding left/right
+    let height: usize = FIRST_CROP_H as usize;
+    let width: usize = FIRST_CROP_W as usize;
+    let y_stride = width;
     let uv_stride = y_stride / 2;
 
 
     // Split the planes
-    let y_plane: &[u8] = &frame[..BYTES_PER_RAW_Y_PLANE];
-    let u_plane: &[u8] = &frame[BYTES_PER_RAW_Y_PLANE..BYTES_PER_RAW_Y_PLANE + BYTES_PER_RAW_UV_PLANE];
-    let v_plane: &[u8] = &frame[BYTES_PER_RAW_Y_PLANE + BYTES_PER_RAW_UV_PLANE..];
+    let y_plane: &[u8] = &frame[..BYTES_PER_FIRST_CROP_Y_PLANE];
+    let u_plane: &[u8] = &frame[BYTES_PER_FIRST_CROP_Y_PLANE..BYTES_PER_FIRST_CROP_Y_PLANE + BYTES_PER_FIRST_CROP_UV_PLANE];
+    let v_plane: &[u8] = &frame[BYTES_PER_FIRST_CROP_Y_PLANE + BYTES_PER_FIRST_CROP_UV_PLANE..];
 
     // We need 4 bytes per pixel to do RGBA
     let mut out = vec![0u8; height * width * 4];
