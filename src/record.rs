@@ -104,7 +104,7 @@ pub fn load_firmware(user_conf: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 /// Stream to the egui GUI for ROI selection
-pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_r: Receiver<(u32, u32)>) -> (u32, u32) {
+pub fn gui_stream(user_conf: &mut Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_r: Receiver<(u32, u32)>) -> (u32, u32) {
     // Interface for choosing a camera
     let cm = CameraManager::new().unwrap();
 
@@ -229,12 +229,12 @@ pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Ve
         req.reuse(ReuseFlag::REUSE_BUFFERS);
         cam.queue_request(req).unwrap();
     }
-    (user_conf.crop_x, user_conf.crop_y) // placeholder, need to determine how to send back the ROI selected
+    (user_conf.crop_x, user_conf.crop_y)
 }
 
 /// Set camera configuration based on user_conf, allocate memory,
 /// and record.
-pub fn record(user_conf: Config) {
+pub fn record(user_conf: &Config) {
     // Interface for choosing a camera
     let cm = CameraManager::new().unwrap();
 
@@ -364,7 +364,7 @@ pub fn record(user_conf: Config) {
     // Start ffmpeg
     let mut ffmpeg_cmd = Command::new("ffmpeg");
     ffmpeg_cmd
-        .args(["-pix_fmt", "yuv20p"])
+        .args(["-pix_fmt", "yuv420p"])
         .args(["-f", "rawvideo"])
         .args(["-framerate", "30"])
         .args(["-s", format!("{}x{}", CROP_W, CROP_H).as_str()])
@@ -419,21 +419,26 @@ fn global_config(_user_conf: &Config) -> UniquePtr<ControlList> {
 fn crop_frame<'a>(mut planes: Vec<&'a [u8]>, y_stride: usize, user_conf: &Config) -> Vec<u8> {
     let w: usize;
     let h: usize;
+    let x: usize;
+    let y: usize;
     if user_conf.roi_selected {
         w = CROP_W as usize;
         h = CROP_H as usize;
+        // Make sure the user-defined crop is an even number of pixels in both axes
+        x = (user_conf.crop_x & !1) as usize;
+        y = (user_conf.crop_y & !1) as usize;
     } else { // if we haven't selected the ROI yet, don't crop as far
         w = FIRST_CROP_W as usize;
         h = FIRST_CROP_H as usize;
+        // If we haven't set the ROI yet, default to 480x480 in the center of the frame
+        x = 774 as usize;
+        y = 520 as usize;
     }
     // planes contains Y, U, and V planes. Y is double the height/width and stride
     let y_plane = planes[0];
     let u_plane = planes[1];
     let v_plane = planes[2];
 
-    // Make sure the user-defined crop is an even number of pixels in both axes
-    let x: usize = (user_conf.crop_x & !1) as usize;
-    let y: usize = (user_conf.crop_y & !1) as usize;
 
     // Define the UV coords (half the size)
     let uvx: usize = x / 2;

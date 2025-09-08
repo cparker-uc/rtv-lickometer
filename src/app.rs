@@ -6,6 +6,7 @@ use crate::{
     BYTES_PER_FIRST_CROP_Y_PLANE,
     BYTES_PER_FIRST_CROP_UV_PLANE,
     BYTES_PER_FIRST_CROP_FRAME,
+    CROP_W, CROP_H,
 };
 use crossbeam_channel;
 use eframe::egui::{
@@ -13,6 +14,10 @@ use eframe::egui::{
     ColorImage,
     TextureHandle,
     TextureOptions,
+    Pos2,
+    Rect,
+    Vec2,
+    Sense,
 };
 use std::{
     cmp::max,
@@ -112,10 +117,50 @@ impl eframe::App for GuiApp {
                 let tex_size = egui::vec2(FIRST_CROP_W as f32, FIRST_CROP_H as f32);
                 //let scale = (avail.x / tex_size.x).min(avail.y / tex_size.y).max(0.0);
                 //let desired = tex_size * scale.max(1.0).min(8.0); // clamp zoom a bit
-                ui.image((tex.id(), tex.size_vec2()));
+                let curr_frame = ui.image((tex.id(), tex.size_vec2()));
+
+                // Draw the ROI selection rectangle. Start by determining bounds on the
+                // current frame. We will need to subtract the top left point of the
+                // frame from the selection top left point (because there is a bit of
+                // padding around the frame in the GUI).
+                let frame_rect = curr_frame.rect;
+                let frame_top_left = frame_rect.min;
+                ui.label(format!("{frame_top_left:#?}")); // DEBUG print
+                let mut top_left = Pos2::new(self.selection.x as f32, self.selection.y as f32);
+                ui.label(format!("{top_left:#?}")); // DEBUG print
+                let mut roi_rect = Rect::from_min_size(top_left, Vec2::new(CROP_W as f32, CROP_H as f32));
+                ui.label(format!("{roi_rect:#?}")); // DEBUG print
+
+                // Get a persistent ID for the ROI rectangle
+                let id = ui.make_persistent_id("roi-rect");
+                
+                // Define a draggable widget with the roi_rect shape and id
+                let resp = ui.interact(roi_rect, id, Sense::click_and_drag());
+
+                // On interaction
+                if resp.dragged() {
+                    // How far did the pointer move during the drag?
+                    let delta = ui.input(|i| i.pointer.delta());
+                    // Change the top-left coord based on the delta
+                    top_left += delta;
+                }
+
+                let confirm_button = ui.button("Confirm ROI");
+
+                // On confirm button click, we compute the top left of the user-selected ROI
+                // (this involves subtracting off the top left of the frame to handle padding
+                // in the GUI). Then we send this over the tx_r channel to the camera thread.
+                if confirm_button.clicked() {
+                    let top_left = top_left - frame_top_left;
+                    let top_left: (u32, u32) = (top_left.x as u32, top_left.y as u32);
+                    self.tx_r.send(top_left);
+                }
+
             } else {
-                ui.label("Waiting for first frame (RGBA over stdin/FIFO)...");
+                ui.label("Waiting for first frame...");
             }
+
+
         });
     }
 }

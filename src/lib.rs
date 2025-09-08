@@ -24,8 +24,8 @@ pub const BYTES_PER_FIRST_CROP_FRAME: usize = BYTES_PER_FIRST_CROP_Y_PLANE + 2 *
 
 // Final crop size (currently 100 px padded width/height so we can jitter the ROI in network
 // training)
-pub const CROP_W: u32 = 324;
-pub const CROP_H: u32 = 324;
+pub const CROP_W: u32 = 224;
+pub const CROP_H: u32 = 224;
 pub const BYTES_PER_CROPPED_Y_PLANE: usize = (CROP_W * CROP_H) as usize;
 pub const BYTES_PER_CROPPED_UV_PLANE: usize = (CROP_W / 2 * CROP_H / 2) as usize;
 pub const BYTES_PER_CROPPED_FRAME: usize = BYTES_PER_CROPPED_Y_PLANE + 2 * BYTES_PER_CROPPED_UV_PLANE;
@@ -44,7 +44,7 @@ pub struct Config {
 
 impl Config {
     /// Initialize the configuration with a descriptive filename and default crop
-    pub fn new() -> Self {
+    pub fn default() -> Self {
         // Default: Crop from 2028x1520 to 480x480 (centered in the frame)
         // This allows a bit of room for the user to configure the ROI
         let crop_x: u32 = 774;

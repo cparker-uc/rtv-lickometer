@@ -14,6 +14,9 @@ use std::{
 };
 
 fn main() {
+    // Initialize a new default Config
+    let mut user_conf: Config = Config::default();
+
     // Spawn a channel to communicate between recording and GUI rendering threads
     let (tx, rx) = bounded::<Vec<u8>>(2);
 
@@ -26,32 +29,26 @@ fn main() {
     // configuration and whatnot, so that we don't have to reinit a
     // CameraManager (which libcamera doesn't like).
     let camera_thread = thread::spawn(move || {
-        // The Config::new method takes a bool indicating if we are
-        // streaming or recording (false = stream)
-        let first_conf: Config = Config::new();
-
         // Load firmware with V4L2 into IMX500 (the CNN rpk file)
-        match load_firmware(&first_conf) {
+        match load_firmware(&user_conf) {
             Ok(_) => println!("IMX500 finished loading CNN"),
             Err(_e) => {
                 eprintln!("Couldn't load CNN into IMX500!");
                 std::process::exit(1);
             },
         }
-        let (roi_x, roi_y) = gui_stream(first_conf, tx, rx_r);
+        let (roi_x, roi_y) = gui_stream(&mut user_conf, tx, rx_r);
 
-        // Once gui_stream exits, assume ROI is selected
+        // Once gui_stream exits, set the ROI that was returned
         // and start recording.
-        let mut second_conf: Config = Config::new();
-        second_conf.set_roi(roi_x, roi_y);
-        record(second_conf);
+        record(&user_conf);
     });
 
     // GUI options
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_resizable(false)
-            .with_inner_size([1300.0, 800.0])
+            .with_inner_size([800.0, 600.0])
             .with_icon(
                 eframe::icon_data::from_png_bytes(&include_bytes!("../assets/icon_small.png")[..])
                     .expect("Failed to load icon")
