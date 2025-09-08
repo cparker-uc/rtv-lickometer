@@ -23,6 +23,7 @@ use std::{
     cmp::max,
     error::Error,
     sync::mpsc::Sender,
+    thread::JoinHandle,
     time::{
         Duration,
         Instant,
@@ -62,22 +63,31 @@ impl Selection {
 }
 
 /// This is where we set attributes to persist between loops
+///
+/// Things are wrapped in Options so that we can take them and
+/// drop when wrapping things up. For instance, we take the
+/// rx every update, then put it back at the end (unless we
+/// want to exit, then we leave it None and update returns
+/// immediately each loop).
 pub struct GuiApp {
     pub selection: Selection,
-    rx: crossbeam_channel::Receiver<Vec<u8>>,
-    tx_r: Sender<(u32, u32)>, // for transmitting selected ROI back
+    rx: Option<crossbeam_channel::Receiver<Vec<u8>>>,
+    tx_r: Option<Sender<(u32, u32)>>, // for transmitting selected ROI back
     tex: Option<TextureHandle>,
-    last_frame_at: Instant, // Track when the previous frame was captured
+    //last_frame_at: Instant, // Track when the previous frame was captured
+    cam_thread: Option<JoinHandle<()>>, // Ensure that we have wrapped up the camera work before closing
+                                // GUI
 }
 
 impl GuiApp {
-    pub fn new(ctx: &eframe::CreationContext, rx: crossbeam_channel::Receiver<Vec<u8>>, tx_r: Sender<(u32, u32)>) -> Self {
+    pub fn new(ctx: &eframe::CreationContext, rx: crossbeam_channel::Receiver<Vec<u8>>, tx_r: Sender<(u32, u32)>, cam_thread: JoinHandle<()>) -> Self {
         Self {
             selection: Selection::default(),
-            rx,
-            tx_r,
+            rx: Some(rx),
+            tx_r: Some(tx_r),
             tex: None,
-            last_frame_at: Instant::now(),
+            //last_frame_at: Instant::now(),
+            cam_thread: Some(cam_thread),
         }
     }
 }
@@ -86,7 +96,20 @@ impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // Pull the newest available frame (drain to most-recent).
         let mut latest: Option<Vec<u8>> = None;
-        while let Ok(f) = self.rx.try_recv() {
+
+        // If anything isn't set anymore, close the window
+        if self.rx.is_none() | self.tx_r.is_none() | self.cam_thread.is_none() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
+        // Check if we have received a frame from the camera
+        // First, we need to make sure that we still have our bounded
+        // channel (otherwise we are wrapping up and should return)
+        let Some(rx) = self.rx.take() else { 
+            return;
+        };
+        while let Ok(f) = rx.try_recv() {
             latest = Some(f);
         }
         let latest = convert_to_rgba(latest);
@@ -100,7 +123,7 @@ impl eframe::App for GuiApp {
             } else {
                 self.tex = Some(ctx.load_texture("stream", image, egui::TextureOptions::LINEAR));
             }
-            self.last_frame_at = Instant::now();
+            //self.last_frame_at = Instant::now();
             ctx.request_repaint(); // keep pumping
         } else {
             // No frame this tick; to avoid busy-looping, request a repaint soon.
@@ -145,21 +168,33 @@ impl eframe::App for GuiApp {
                     top_left += delta;
                 }
 
-                let confirm_button = ui.button("Confirm ROI");
-
                 // On confirm button click, we compute the top left of the user-selected ROI
                 // (this involves subtracting off the top left of the frame to handle padding
                 // in the GUI). Then we send this over the tx_r channel to the camera thread.
-                if confirm_button.clicked() {
+                if ui.button("Confirm ROI").clicked() {
                     let top_left = top_left - frame_top_left;
                     let top_left: (u32, u32) = (top_left.x as u32, top_left.y as u32);
-                    self.tx_r.send(top_left);
+                    let tx_r = self.tx_r.take().unwrap();
+                    tx_r.send(top_left);
+
+                    // Wrap up the camera work
+                    let cam_thread = self.cam_thread.take().unwrap();
+                    cam_thread.join().expect("Couldn't join camera thread");
+                    
+                    // Drop the channels to ensure we wrap up nicely.
+                    drop(tx_r);
+                    drop(rx);
+
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
                 }
 
             } else {
                 ui.label("Waiting for first frame...");
             }
 
+            // Put rx back in its Option for next loop
+            self.rx = Some(rx);
 
         });
     }

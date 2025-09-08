@@ -56,7 +56,7 @@ impl Config {
             .unwrap()
             .into_string()
             .unwrap_or_else(|_| "unknown-hostname".to_string());
-        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let date = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
         let filename = format!("{}_{}.mp4", hostname, date);
 
         Self { filename, crop_x, crop_y, roi_selected }

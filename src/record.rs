@@ -104,7 +104,7 @@ pub fn load_firmware(user_conf: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 /// Stream to the egui GUI for ROI selection
-pub fn gui_stream(user_conf: &mut Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_r: Receiver<(u32, u32)>) -> (u32, u32) {
+pub fn gui_stream(user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_r: Receiver<(u32, u32)>) -> (u32, u32) {
     // Interface for choosing a camera
     let cm = CameraManager::new().unwrap();
 
@@ -205,11 +205,15 @@ pub fn gui_stream(user_conf: &mut Config, stream_tx: crossbeam_channel::Sender<V
         cam.queue_request(req).unwrap();
     }
     // Main loop, loops until user interrupt
-    while !user_conf.roi_selected {
+    let mut crop_x: u32;
+    let mut crop_y: u32;
+    loop {
         // First, check if the user selected the ROI yet (try_recv so we don't block)
         if let Ok((x,y)) = rx_r.try_recv() {
-            println!("ROI selection received: x: {x}, y: {y}");
-            user_conf.set_roi(x, y);
+            println!("ROI selection received: x: {x}, y: {y}");       
+            crop_x = x;
+            crop_y = y;
+            break;
         }
         // Check the channel for a message, timeout after 2 seconds
         let mut req = rx.recv_timeout(Duration::from_secs(2)).expect("Camera request failed");
@@ -229,7 +233,7 @@ pub fn gui_stream(user_conf: &mut Config, stream_tx: crossbeam_channel::Sender<V
         req.reuse(ReuseFlag::REUSE_BUFFERS);
         cam.queue_request(req).unwrap();
     }
-    (user_conf.crop_x, user_conf.crop_y)
+    (crop_x, crop_y)
 }
 
 /// Set camera configuration based on user_conf, allocate memory,
