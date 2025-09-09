@@ -24,6 +24,7 @@ use eframe::egui::{
     Sense,
     RichText,
     Color32,
+    Stroke,
 };
 use std::{
     cmp::max,
@@ -86,7 +87,7 @@ impl Selection {
 /// want to exit, then we leave it None and update returns
 /// immediately each loop).
 pub struct GuiApp {
-    selection: Arc<Mutex<(u32, u32)>>,
+    selection: (u32, u32),
     rx: Option<crossbeam_channel::Receiver<Vec<u8>>>,
     tx_r: Option<Sender<(u32, u32)>>, // for transmitting selected ROI back
     tex: Option<TextureHandle>,
@@ -107,10 +108,8 @@ impl GuiApp {
         // Here, the channel will pass a tuple of u32s (x,y).
         let (tx_r, rx_r) = channel::<(u32, u32)>();
 
-        // Mutex for selection coords
-        let roi_selection = Arc::new(Mutex::new((0u32, 0u32)));
-        // Cloned Mutex to pass for writing ROI
-        let roi_writer = Arc::clone(&roi_selection);
+        // Start with selection at origin
+        let roi_selection = (0u32, 0u32);
 
         // Start the camera stream for the GUI
         let cam_thread = thread::spawn(move || {
@@ -125,10 +124,7 @@ impl GuiApp {
                     std::process::exit(1);
                 },
             }
-            let (x, y) = gui_stream(user_conf, tx, rx_r);
-            let mut roi = roi_writer.lock().unwrap();
-            roi.0 = x;
-            roi.1 = y;
+            gui_stream(user_conf, tx, rx_r);
         });
 
         Self {
@@ -161,26 +157,18 @@ impl GuiApp {
             .show(ctx, |ui| {
             if let Some(tex) = &self.tex {
                 // Fit while preserving aspect ratio.
-                let avail = ui.available_size();
-                // need to subtract the padding bytes from the width
                 let tex_size = egui::vec2(FIRST_CROP_W as f32, FIRST_CROP_H as f32);
-                //let scale = (avail.x / tex_size.x).min(avail.y / tex_size.y).max(0.0);
-                //let desired = tex_size * scale.max(1.0).min(8.0); // clamp zoom a bit
                 let curr_frame = ui.image((tex.id(), tex.size_vec2()));
 
-                // Grab the Mutex lock and check the current x and y
-                let (x,y) = *self.selection.lock().unwrap();
+                let (mut x, mut y) = self.selection;
                 // Draw the ROI selection rectangle. Start by determining bounds on the
                 // current frame. We will need to subtract the top left point of the
                 // frame from the selection top left point (because there is a bit of
                 // padding around the frame in the GUI).
                 let frame_rect = curr_frame.rect;
                 let frame_top_left = frame_rect.min;
-                ui.label(format!("{frame_top_left:#?}")); // DEBUG print
                 let mut top_left = Pos2::new(x as f32, y as f32);
-                ui.label(format!("{top_left:#?}")); // DEBUG print
                 let mut roi_rect = Rect::from_min_size(top_left, Vec2::new(CROP_W as f32, CROP_H as f32));
-                ui.label(format!("{roi_rect:#?}")); // DEBUG print
 
                 // Get a persistent ID for the ROI rectangle
                 let id = ui.make_persistent_id("roi-rect");
@@ -194,7 +182,21 @@ impl GuiApp {
                     let delta = ui.input(|i| i.pointer.delta());
                     // Change the top-left coord based on the delta
                     top_left += delta;
+                    self.selection = (top_left.x as u32, top_left.y as u32);
                 }
+
+                // Clamp the ROI rectangle to the frame
+                let min = frame_rect.min;
+                let max = frame_rect.max - Vec2::new(CROP_W as f32, CROP_H as f32);
+
+                top_left.x = top_left.x.clamp(min.x, max.x.max(min.x));
+                top_left.y = top_left.y.clamp(min.y, max.y.max(min.y));
+                roi_rect = Rect::from_min_size(top_left, Vec2::new(CROP_W as f32, CROP_H as f32));
+
+                // Paint the rectangle
+                let p = ui.painter();
+                p.rect_filled(roi_rect, 3.0, Color32::from_rgba_premultiplied(64, 160, 255, 20));
+                p.rect_stroke(roi_rect, 3.0, Stroke::new(2.0, Color32::from_rgb(64, 160, 255)));
 
                 // On confirm button click, we compute the top left of the user-selected ROI
                 // (this involves subtracting off the top left of the frame to handle padding
@@ -225,7 +227,7 @@ impl GuiApp {
         // Once gui_stream exits, set the ROI that was returned
         // and start recording.
         let mut user_conf = Config::default();
-        let (x,y) = *self.selection.lock().unwrap();
+        let (x,y) = self.selection;
         user_conf.set_roi(x, y);
 
         self.filename = Some(user_conf.filename.to_owned());
@@ -247,6 +249,14 @@ impl GuiApp {
         egui::CentralPanel::default()
             .frame(style::set_frame_margins(&ctx))
             .show(ctx, |ui| {
+                // Report the selected ROI
+                ui.label(RichText::new("ROI selected: ").strong().size(18.0));
+                ui.label(
+                    RichText::new(
+                        format!("\tx: {}, y: {}, w: {}, h: {}\n", self.selection.0, self.selection.1, 224, 224)
+                    ).size(16.0)
+                );
+
                 // Filename display
                 if let Some(filename) = &self.filename {
                     let filename_label_text = RichText::new("Recording to file: ")
@@ -280,6 +290,7 @@ impl GuiApp {
                 } else {
                     panic!("Timer didn't start");
                 }
+
                 // Stop recording button
                 let stop_button_text = RichText::new("Stop Recording")
                     .strong()
