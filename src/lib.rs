@@ -22,8 +22,15 @@ pub const BYTES_PER_FIRST_CROP_Y_PLANE: usize = (FIRST_CROP_W * FIRST_CROP_H) as
 pub const BYTES_PER_FIRST_CROP_UV_PLANE: usize = (FIRST_CROP_W / 2 * FIRST_CROP_H / 2) as usize;
 pub const BYTES_PER_FIRST_CROP_FRAME: usize = BYTES_PER_FIRST_CROP_Y_PLANE + 2 * BYTES_PER_FIRST_CROP_UV_PLANE;
 
-// Final crop size (currently 100 px padded width/height so we can jitter the ROI in network
+// Training crop size (100 px padded width/height so we can jitter the ROI in network
 // training)
+pub const TRAINING_CROP_W: u32 = 324;
+pub const TRAINING_CROP_H: u32 = 324;
+pub const BYTES_PER_TRAINING_CROP_Y_PLANE: usize = (TRAINING_CROP_W * TRAINING_CROP_H) as usize;
+pub const BYTES_PER_TRAINING_CROP_UV_PLANE: usize = (TRAINING_CROP_W / 2 * TRAINING_CROP_H / 2) as usize;
+pub const BYTES_PER_TRAINING_CROP_FRAME: usize = BYTES_PER_TRAINING_CROP_Y_PLANE + 2 * BYTES_PER_TRAINING_CROP_UV_PLANE;
+
+// Final crop size
 pub const CROP_W: u32 = 224;
 pub const CROP_H: u32 = 224;
 pub const BYTES_PER_CROPPED_Y_PLANE: usize = (CROP_W * CROP_H) as usize;
