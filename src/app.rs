@@ -195,8 +195,7 @@ impl GuiApp {
 
                 // Paint the rectangle
                 let p = ui.painter();
-                p.rect_filled(roi_rect, 3.0, Color32::from_rgba_premultiplied(64, 160, 255, 20));
-                p.rect_stroke(roi_rect, 3.0, Stroke::new(2.0, Color32::from_rgb(64, 160, 255)));
+                p.rect_stroke(roi_rect, 3.0, Stroke::new(4.0, Color32::RED));
 
                 // On confirm button click, we compute the top left of the user-selected ROI
                 // (this involves subtracting off the top left of the frame to handle padding
