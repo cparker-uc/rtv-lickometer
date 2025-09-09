@@ -1,7 +1,11 @@
 use crate::{
+    Config,
+    record::{
+        load_firmware,
+        gui_stream,
+        record,
+    },
     // Constants
-    //RAW_W, RAW_H, BYTES_PER_RAW_FRAME,
-    //BYTES_PER_RAW_Y_PLANE, BYTES_PER_RAW_UV_PLANE,
     FIRST_CROP_W, FIRST_CROP_H,
     BYTES_PER_FIRST_CROP_Y_PLANE,
     BYTES_PER_FIRST_CROP_UV_PLANE,
@@ -22,8 +26,18 @@ use eframe::egui::{
 use std::{
     cmp::max,
     error::Error,
-    sync::mpsc::Sender,
-    thread::JoinHandle,
+    sync::{
+        Arc,
+        Mutex,
+        mpsc::{
+            Sender,
+            channel,
+        },
+    },
+    thread::{
+        self,
+        JoinHandle,
+    },
     time::{
         Duration,
         Instant,
@@ -70,7 +84,7 @@ impl Selection {
 /// want to exit, then we leave it None and update returns
 /// immediately each loop).
 pub struct GuiApp {
-    pub selection: Selection,
+    selection: Arc<Mutex<(u32, u32)>>,
     rx: Option<crossbeam_channel::Receiver<Vec<u8>>>,
     tx_r: Option<Sender<(u32, u32)>>, // for transmitting selected ROI back
     tex: Option<TextureHandle>,
@@ -80,9 +94,41 @@ pub struct GuiApp {
 }
 
 impl GuiApp {
-    pub fn new(ctx: &eframe::CreationContext, rx: crossbeam_channel::Receiver<Vec<u8>>, tx_r: Sender<(u32, u32)>, cam_thread: JoinHandle<()>) -> Self {
+    pub fn new(ctx: &eframe::CreationContext) -> Self {
+        // Spawn a channel to communicate between recording and GUI rendering threads
+        let (tx, rx) = crossbeam_channel::bounded::<Vec<u8>>(2);
+
+        // Spawn a channel for the other communication direction (we need to communicate
+        // both directions to allow the user to actually set the ROI).
+        // Here, the channel will pass a tuple of u32s (x,y).
+        let (tx_r, rx_r) = channel::<(u32, u32)>();
+
+        // Mutex for selection coords
+        let roi_selection = Arc::new(Mutex::new((0u32, 0u32)));
+        // Cloned Mutex to pass for writing ROI
+        let roi_writer = Arc::clone(&roi_selection);
+
+        // Start the camera stream for the GUI
+        let cam_thread = thread::spawn(move || {
+            // Initialize a new default Config
+            let user_conf: Config = Config::default();
+
+            // Load firmware with V4L2 into IMX500 (the CNN rpk file)
+            match load_firmware(&user_conf) {
+                Ok(_) => println!("IMX500 finished loading CNN"),
+                Err(_e) => {
+                    eprintln!("Couldn't load CNN into IMX500!");
+                    std::process::exit(1);
+                },
+            }
+            let (x, y) = gui_stream(user_conf, tx, rx_r);
+            let mut roi = roi_writer.lock().unwrap();
+            roi.0 = x;
+            roi.1 = y;
+        });
+
         Self {
-            selection: Selection::default(),
+            selection: roi_selection,
             rx: Some(rx),
             tx_r: Some(tx_r),
             tex: None,
@@ -90,48 +136,22 @@ impl GuiApp {
             cam_thread: Some(cam_thread),
         }
     }
-}
 
-impl eframe::App for GuiApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        // Pull the newest available frame (drain to most-recent).
-        let mut latest: Option<Vec<u8>> = None;
-
-        // If anything isn't set anymore, close the window
-        if self.rx.is_none() | self.tx_r.is_none() | self.cam_thread.is_none() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
-        }
-
-        // Check if we have received a frame from the camera
-        // First, we need to make sure that we still have our bounded
-        // channel (otherwise we are wrapping up and should return)
-        let Some(rx) = self.rx.take() else { 
-            return;
-        };
-        while let Ok(f) = rx.try_recv() {
-            latest = Some(f);
-        }
-        let latest = convert_to_rgba(latest);
-
-        if let Some(pixels) = latest {
-            // Create or update texture.
-            let size = [FIRST_CROP_W as usize, FIRST_CROP_H as usize];
-            let image = ColorImage::from_rgba_unmultiplied(size, &pixels);
-            if let Some(tex) = &mut self.tex {
-                tex.set(image, TextureOptions::default());
-            } else {
-                self.tex = Some(ctx.load_texture("stream", image, egui::TextureOptions::LINEAR));
-            }
-            //self.last_frame_at = Instant::now();
-            ctx.request_repaint(); // keep pumping
+    /// Until we select the ROI, display a stream of the video
+    fn video_player(&mut self, ctx: &egui::Context, latest: Vec<u8>) {
+        // Create or update texture.
+        let size = [FIRST_CROP_W as usize, FIRST_CROP_H as usize];
+        let image = ColorImage::from_rgba_unmultiplied(size, &latest);
+        if let Some(tex) = &mut self.tex {
+            tex.set(image, TextureOptions::default());
         } else {
-            // No frame this tick; to avoid busy-looping, request a repaint soon.
-            ctx.request_repaint_after(Duration::from_millis(10));
+            self.tex = Some(ctx.load_texture("stream", image, egui::TextureOptions::LINEAR));
         }
+        //self.last_frame_at = Instant::now();
+        ctx.request_repaint();
 
         egui::CentralPanel::default()
-            .frame(style::set_frame_margins(ctx))
+            .frame(style::set_frame_margins(&ctx))
             .show(ctx, |ui| {
             if let Some(tex) = &self.tex {
                 // Fit while preserving aspect ratio.
@@ -142,6 +162,8 @@ impl eframe::App for GuiApp {
                 //let desired = tex_size * scale.max(1.0).min(8.0); // clamp zoom a bit
                 let curr_frame = ui.image((tex.id(), tex.size_vec2()));
 
+                // Grab the Mutex lock and check the current x and y
+                let (x,y) = *self.selection.lock().unwrap();
                 // Draw the ROI selection rectangle. Start by determining bounds on the
                 // current frame. We will need to subtract the top left point of the
                 // frame from the selection top left point (because there is a bit of
@@ -149,7 +171,7 @@ impl eframe::App for GuiApp {
                 let frame_rect = curr_frame.rect;
                 let frame_top_left = frame_rect.min;
                 ui.label(format!("{frame_top_left:#?}")); // DEBUG print
-                let mut top_left = Pos2::new(self.selection.x as f32, self.selection.y as f32);
+                let mut top_left = Pos2::new(x as f32, y as f32);
                 ui.label(format!("{top_left:#?}")); // DEBUG print
                 let mut roi_rect = Rect::from_min_size(top_left, Vec2::new(CROP_W as f32, CROP_H as f32));
                 ui.label(format!("{roi_rect:#?}")); // DEBUG print
@@ -183,20 +205,70 @@ impl eframe::App for GuiApp {
                     
                     // Drop the channels to ensure we wrap up nicely.
                     drop(tx_r);
-                    drop(rx);
-
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     return;
                 }
 
             } else {
                 ui.label("Waiting for first frame...");
             }
-
-            // Put rx back in its Option for next loop
-            self.rx = Some(rx);
-
         });
+    }
+
+    /// Once the ROI is selected, wrap things up and start recording
+    fn roi_selection_wrapup(&mut self, ctx: &egui::Context) {
+        // Once gui_stream exits, set the ROI that was returned
+        // and start recording.
+        let mut user_conf = Config::default();
+        let (x,y) = *self.selection.lock().unwrap();
+        user_conf.set_roi(x, y);
+
+        // Spawn a new camera thread and save the JoinHandle
+        let camera_thread = thread::spawn(move || {
+            record(&user_conf);
+        });
+        self.cam_thread = Some(camera_thread);
+    }
+
+    /// If we are just recording, on the update loop we want to
+    /// display a status message
+    fn recording_progress(&mut self, ctx: &egui::Context) {
+
+    }
+}
+
+impl eframe::App for GuiApp {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Pull the newest available frame (drain to most-recent).
+        let mut latest: Option<Vec<u8>> = None;
+
+        // If everything isn't set anymore, wrap up the ROI selection
+        if self.rx.is_none() & self.tx_r.is_none() & self.cam_thread.is_none() {
+            self.roi_selection_wrapup(ctx);
+        }
+
+        // Check if we have received a frame from the camera
+        // First, we need to make sure that we still have our bounded
+        // channel (otherwise we are done selecting ROI and should just
+        // report the background recording progress)
+        let Some(rx) = self.rx.take() else { 
+            self.recording_progress(ctx);
+            return; // force return here after reporting progress
+        };
+
+        while let Ok(f) = rx.try_recv() {
+            latest = Some(f);
+        }
+        // If we can convert to RGBA, render the latest frame
+        if let Some(latest) = convert_to_rgba(latest){
+            self.video_player(ctx, latest);
+        } else {
+            // No frame this tick; to avoid busy-looping, request a repaint soon.
+            ctx.request_repaint_after(Duration::from_millis(10));
+        }
+
+        // return the receiver to its Option
+        self.rx = Some(rx);
+
     }
 }
 
