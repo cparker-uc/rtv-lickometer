@@ -1,17 +1,9 @@
-use rtv_lickometer::{
-    Config,
-    record::{
-        record,
-        gui_stream,
-    },
-};
-
 fn main() {
     // GUI options
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_resizable(false)
-            .with_inner_size([800.0, 600.0])
+            .with_inner_size([480.0, 580.0])
             .with_icon(
                 eframe::icon_data::from_png_bytes(&include_bytes!("../assets/icon_small.png")[..])
                     .expect("Failed to load icon")

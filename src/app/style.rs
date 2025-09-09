@@ -11,9 +11,6 @@ pub fn set_font(ctx: &egui::Context) {
         egui::FontData::from_static(include_bytes!(
             "../../assets/Hack-Regular.ttf"
         )),
-//      std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
-//          "../../assets/Hack-Regular.ttf"
-//      ))),
     );
 
     // Ensure we use Hack for both proportional and monospace
@@ -32,8 +29,8 @@ pub fn set_font(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// Add a bit of padding to the margins (symmetrically)
+/// Get rid of any padding
 pub fn set_frame_margins(ctx: &egui::Context) -> egui::Frame {
     let mut frame = egui::Frame::central_panel(&ctx.style());
-    frame.inner_margin(egui::Margin::symmetric(16.0,16.0))
+    frame.inner_margin(egui::Margin::symmetric(0.0,0.0))
 }

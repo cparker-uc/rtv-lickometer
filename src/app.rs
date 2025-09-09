@@ -22,6 +22,8 @@ use eframe::egui::{
     Rect,
     Vec2,
     Sense,
+    RichText,
+    Color32,
 };
 use std::{
     cmp::max,
@@ -91,6 +93,8 @@ pub struct GuiApp {
     //last_frame_at: Instant, // Track when the previous frame was captured
     cam_thread: Option<JoinHandle<()>>, // Ensure that we have wrapped up the camera work before closing
                                 // GUI
+    filename: Option<String>,
+    rec_timer: Option<Instant>, // track when recording started
 }
 
 impl GuiApp {
@@ -134,6 +138,8 @@ impl GuiApp {
             tex: None,
             //last_frame_at: Instant::now(),
             cam_thread: Some(cam_thread),
+            filename: None,
+            rec_timer: None,
         }
     }
 
@@ -205,13 +211,13 @@ impl GuiApp {
                     
                     // Drop the channels to ensure we wrap up nicely.
                     drop(tx_r);
+
+                    // Shrink the window somewhat, it doesn't need as much real-estate now
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(480.0, 360.0)));
                     return;
                 }
 
-            } else {
-                ui.label("Waiting for first frame...");
-            }
-        });
+            }        });
     }
 
     /// Once the ROI is selected, wrap things up and start recording
@@ -222,38 +228,90 @@ impl GuiApp {
         let (x,y) = *self.selection.lock().unwrap();
         user_conf.set_roi(x, y);
 
+        self.filename = Some(user_conf.filename.to_owned());
+
         // Spawn a new camera thread and save the JoinHandle
         let camera_thread = thread::spawn(move || {
             record(&user_conf);
         });
         self.cam_thread = Some(camera_thread);
+
+        // Start timing the recording thread so we can report
+        // that info to the user
+        self.rec_timer = Some(Instant::now());
     }
 
     /// If we are just recording, on the update loop we want to
     /// display a status message
     fn recording_progress(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default()
+            .frame(style::set_frame_margins(&ctx))
+            .show(ctx, |ui| {
+                // Filename display
+                if let Some(filename) = &self.filename {
+                    let filename_label_text = RichText::new("Recording to file: ")
+                        .strong()
+                        .size(18.0);
+                    let filename_text = RichText::new(format!("\t{}\n", filename))
+                        //.strong()
+                        .italics()
+                        .size(16.0);
+                    ui.label(filename_label_text);
+                    ui.label(filename_text);
+                } else {
+                    panic!("No filename");
+                }
+                // Timer display
+                if let Some(start_time) = self.rec_timer {
+                    let elapsed_time = start_time.elapsed();
+                    let min = elapsed_time.as_secs() / 60;  // Floor division
+                    let secs = elapsed_time.as_secs() % 60; // don't count minutes
+                    let msecs = elapsed_time.subsec_millis();
 
+
+                    let time_label_text = RichText::new("Time elapsed: ")
+                        .strong()
+                        .size(18.0);
+                    let time_text = RichText::new(format!("\t{}:{}.{}\n", min, secs, msecs))
+                        .size(18.0);
+                    ui.label(time_label_text);
+                    ui.label(time_text);
+                    ctx.request_repaint_after(Duration::from_millis(10));
+                } else {
+                    panic!("Timer didn't start");
+                }
+                // Stop recording button
+                let stop_button_text = RichText::new("Stop Recording")
+                    .strong()
+                    .color(Color32::RED)
+                    .size(18.0);
+                let stop_button = ui.button(stop_button_text);
+
+                if stop_button.clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
     }
 }
 
 impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        // Pull the newest available frame (drain to most-recent).
-        let mut latest: Option<Vec<u8>> = None;
-
-        // If everything isn't set anymore, wrap up the ROI selection
-        if self.rx.is_none() & self.tx_r.is_none() & self.cam_thread.is_none() {
+        // If the camera thread isn't set anymore, wrap up the ROI selection
+        // and start the recording thread
+        if self.cam_thread.is_none() {
             self.roi_selection_wrapup(ctx);
+            return;
         }
 
-        // Check if we have received a frame from the camera
-        // First, we need to make sure that we still have our bounded
-        // channel (otherwise we are done selecting ROI and should just
-        // report the background recording progress)
+        // Check if we have received a frame from the camera, otherwise just
+        // report the recording progress
         let Some(rx) = self.rx.take() else { 
             self.recording_progress(ctx);
             return; // force return here after reporting progress
         };
+
+        // Pull the newest available frame (drain to most-recent).
+        let mut latest: Option<Vec<u8>> = None;
 
         while let Ok(f) = rx.try_recv() {
             latest = Some(f);
@@ -261,6 +319,9 @@ impl eframe::App for GuiApp {
         // If we can convert to RGBA, render the latest frame
         if let Some(latest) = convert_to_rgba(latest){
             self.video_player(ctx, latest);
+            // Check tx_r now, and return early to skip replacing rx
+            // if tx_r is gone
+            if self.tx_r.is_none() { return; }
         } else {
             // No frame this tick; to avoid busy-looping, request a repaint soon.
             ctx.request_repaint_after(Duration::from_millis(10));
