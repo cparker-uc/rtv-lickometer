@@ -40,7 +40,11 @@ use std::{
         Sender,
         Receiver,
     },
-    time::Duration,
+    time::{
+        Duration,
+        Instant,
+        SystemTime,
+    },
 };
 use v4l::{
     Device, Control, control::Value,
@@ -379,19 +383,51 @@ pub fn record(user_conf: &Config) {
         .stdin(reader); // pass the read end of the pipe
 
     let mut ffmpeg_proc = ffmpeg_cmd.spawn().expect("Couldn't start ffmpeg thread");
+
+    // Open file for writing frame timestamps
+    let timestamp_filename = user_conf.filename.clone();
+    let timestamp_filename = format!("{}.txt", timestamp_filename.split('.').next().unwrap());
+    
+    let mut timestamp_file = OpenOptions::new()
+        .read(false)
+        .write(true)
+        .create(true)
+        .open(timestamp_filename)
+        .context("open timestamp file w")
+        .expect("oops");
+    // Check exactly when we are starting in nanoseconds since 1/1/1970
+    let system_start_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
+        .expect("System time is before 1/1/1970");
+
+    timestamp_file.write(format!("System time recorded at capture start (ns since 1/1/1970): {}\n", system_start_time.as_nanos()).as_bytes());
+    timestamp_file.write("Remaining lines each contain #ns since start time\n".as_bytes());
+
+    // Need to also store an Instant that we are starting, so we can use elapsed() to check the
+    // diff
+    let start_time = Instant::now();
     // Main loop, loops until user interrupt
     loop {
         // Check the channel for a message, timeout after 2 seconds
         let mut req = rx.recv_timeout(Duration::from_secs(2)).expect("Camera request failed");
 
+        // Write the current time elapsed for this frame
+        // I think we should do it before the cropping and writing so that it's as
+        // close to the time when the photons hit the sensor as possible
+        let loop_time = start_time.elapsed();
+        let loop_time = format!("{}\n", loop_time.as_nanos());
+        timestamp_file.write(loop_time.as_bytes());
+
         // Get framebuffer for the stream
         let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&stream).unwrap();
 
+        // Pull out the data and crop the frame
         let mut planes: Vec<&[u8]> = framebuffer.data();
         let cropped_planes: Vec<u8> = crop_frame(planes, y_stride as usize, &user_conf);
 
+        // Send over the pipe to ffmpeg
         writer.write_all(&cropped_planes[..]).expect("Couldn't write frame to ffmpeg pipe");
 
+        // Reuse the buffers so we don't have to reallocate every frame
         req.reuse(ReuseFlag::REUSE_BUFFERS);
         cam.queue_request(req).unwrap();
     }
