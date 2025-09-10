@@ -481,6 +481,10 @@ fn crop_frame<'a>(mut planes: Vec<&'a [u8]>, y_stride: usize, user_conf: &Config
         if y > 50usize {
             y -= 50;
         } else { y = 0usize }
+
+        // Now we need to account for the pixels missing due to the intermediate crop
+        x += 774;
+        y += 520;
     } else { // if we haven't selected the ROI yet, don't crop as far
         w = FIRST_CROP_W as usize;
         h = FIRST_CROP_H as usize;
