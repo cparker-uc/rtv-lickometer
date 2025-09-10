@@ -3,9 +3,6 @@ mod app;
 pub use app::GuiApp;
 pub mod record;
 
-use hostname; // For setting output filename based on hostname
-use chrono;
-
 // These should be constants because the camera can only record
 // at 30 fps in one resolution, and the NN will always need the same shape
 pub const RAW_W: u32 = 2028;
@@ -50,8 +47,17 @@ pub struct Config {
 }
 
 impl Config {
+    /// Allow the user to set the crop
+    pub fn set_roi(&mut self, crop_x: u32, crop_y: u32) {
+        self.crop_x = crop_x;
+        self.crop_y = crop_y;
+        self.roi_selected = true;
+    }
+}
+
+impl Default for Config {
     /// Initialize the configuration with a descriptive filename and default crop
-    pub fn default() -> Self {
+    fn default() -> Self {
         // Default: Crop from 2028x1520 to 480x480 (centered in the frame)
         // This allows a bit of room for the user to configure the ROI
         let crop_x: u32 = 774;
@@ -69,10 +75,4 @@ impl Config {
         Self { filename, crop_x, crop_y, roi_selected }
     }
 
-    /// Allow the user to set the crop
-    pub fn set_roi(&mut self, crop_x: u32, crop_y: u32) {
-        self.crop_x = crop_x;
-        self.crop_y = crop_y;
-        self.roi_selected = true;
-    }
 }

@@ -2,10 +2,9 @@ use anyhow::Context;
 use crate::{
     Config,
     // Constants
-    RAW_W, RAW_H, BYTES_PER_RAW_FRAME,
-    BYTES_PER_RAW_Y_PLANE, BYTES_PER_RAW_UV_PLANE,
-    CROP_W, CROP_H, BYTES_PER_CROPPED_FRAME,
-    FIRST_CROP_W, FIRST_CROP_H, BYTES_PER_FIRST_CROP_FRAME,
+    BYTES_PER_RAW_FRAME,
+    CROP_W, CROP_H,
+    FIRST_CROP_W, FIRST_CROP_H, // intermediate crop size for GUI
     TRAINING_CROP_W, TRAINING_CROP_H,
 };
 use crossbeam_channel;
@@ -15,29 +14,26 @@ use libcamera::{
     control::ControlList,
     control_value::ControlValue,
     controls,
-    framebuffer::AsFrameBuffer,
     framebuffer_allocator::{FrameBuffer, FrameBufferAllocator},
     framebuffer_map::MemoryMappedFrameBuffer,
-    geometry::{Rectangle, Size},
+    geometry::Size,
     pixel_format::PixelFormat,
     properties::Model,
     request::{Request, RequestStatus, ReuseFlag},
-    stream::{StreamRole, Stream},
+    stream::StreamRole,
     utils::UniquePtr,
 };
 use libcamera_sys;
 use std::{
-    env::Args,
     error::Error,
     fs::{self, OpenOptions, File},
-    io::{Read, Write, pipe, prelude::*},
+    io::{Write, pipe},
     mem::zeroed,
     os::fd::AsRawFd,
     path::Path,
     process::Command,
     sync::mpsc::{
         channel, 
-        Sender,
         Receiver,
     },
     time::{
@@ -52,30 +48,33 @@ use v4l::{
 use v4l2_sys_mit as v4l2;
 
 // Low-level libcamera-sys representations of the IMX500 specific metadata
-const CNN_OUTPUT_ID: u32 = libcamera_sys::CNN_OUTPUT_TENSOR as u32;
-const CNN_OUTPUT_INFO_ID: u32 = libcamera_sys::CNN_OUTPUT_TENSOR_INFO as u32;
-const CNN_INPUT_ID: u32 = libcamera_sys::CNN_INPUT_TENSOR as u32;
-const CNN_INPUT_INFO_ID: u32 = libcamera_sys::CNN_INPUT_TENSOR_INFO as u32;
-const CNN_ENABLE_INPUT_TENSOR_ID: u32 = libcamera_sys::CNN_ENABLE_INPUT_TENSOR as u32;
-const CNN_KPI_INFO_ID: u32 = libcamera_sys::CNN_KPI_INFO as u32;
+const CNN_OUTPUT_ID: u32 = libcamera_sys::CNN_OUTPUT_TENSOR;
+const CNN_OUTPUT_INFO_ID: u32 = libcamera_sys::CNN_OUTPUT_TENSOR_INFO;
+const CNN_INPUT_ID: u32 = libcamera_sys::CNN_INPUT_TENSOR;
+const CNN_INPUT_INFO_ID: u32 = libcamera_sys::CNN_INPUT_TENSOR_INFO;
+const CNN_ENABLE_INPUT_TENSOR_ID: u32 = libcamera_sys::CNN_ENABLE_INPUT_TENSOR;
+const CNN_KPI_INFO_ID: u32 = libcamera_sys::CNN_KPI_INFO;
 
 // Define MJPEG format. From the libcamera-rs examples: drm-fourcc doesn't include
 // an enum variant for MJPEG, so we construct it manually from the raw fourcc identifier
 const PIXEL_FORMAT_YU12: PixelFormat = PixelFormat::new(u32::from_le_bytes([b'Y', b'U', b'1', b'2']), 0);
 
 /// Open the IMX500 with V4L and write the CNN file to the NPU
-pub fn load_firmware(user_conf: &Config) -> Result<(), Box<dyn Error>> {
+/// Not using user_conf at the moment, but it will eventually hold
+/// the CNN rpk filename (if we don't fully abandon IMX500 b/c
+/// of the integral IR filter)
+pub fn load_firmware(_user_conf: &Config) -> Result<(), Box<dyn Error>> {
     // Loop through the /dev directory and check the devices
-    let mut dev_dir = fs::read_dir(&Path::new("/dev/"))?;
+    let mut dev_dir = fs::read_dir(Path::new("/dev/"))?;
     let mut subdev_num: usize = 0;
     while let Some(Ok(d)) = dev_dir.next() {
         // If the current entry has v4l-subdev in the path,
         // check it for IMX500 controls
         let d_path = d.path();
-        let mut d_str = d_path.to_str().unwrap();
-        if let Some(_) = d_str.find("v4l-subdev") {
-            let dev = Device::with_path(&d.path()).expect("couldn't open device");
-            if let Ok(_) = dev.query_controls() {
+        let d_str = d_path.to_str().unwrap();
+        if d_str.contains("v4l-subdev") {
+            let dev = Device::with_path(d.path()).expect("couldn't open device");
+            if dev.query_controls().is_ok() {
                 let split_path = d_str.split("subdev");
                 let num = split_path.last().unwrap();
                 subdev_num = num.parse()?;
@@ -84,7 +83,7 @@ pub fn load_firmware(user_conf: &Config) -> Result<(), Box<dyn Error>> {
     }
     let subdev_path = format!("/dev/v4l-subdev{}", subdev_num);
     println!("Opening {} to load firmware", subdev_path);
-    let imx500 = Device::with_path(&Path::new(&subdev_path))
+    let imx500 = Device::with_path(Path::new(&subdev_path))
                               .expect("Failed to open device");
     let ctrls = imx500.query_controls()?;
 
@@ -139,7 +138,7 @@ pub fn gui_stream(user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8
     // Can set capture size here (but it will just downsample unless a supported
     // capture resolution/format is chosen).
     // I'm using the 2x2 binned output res of 2028x1520 because it supports 30 fps
-    let mut cfg = &mut cfgs.get_mut(0).unwrap();
+    let cfg = &mut cfgs.get_mut(0).unwrap();
     cfg.set_size(Size { width: 2028, height: 1520 });
     
     // Validate config
@@ -210,8 +209,8 @@ pub fn gui_stream(user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8
         cam.queue_request(req).unwrap();
     }
     // Main loop, loops until user interrupt
-    let mut crop_x: u32;
-    let mut crop_y: u32;
+    let crop_x: u32;
+    let crop_y: u32;
     loop {
         // First, check if the user selected the ROI yet (try_recv so we don't block)
         if let Ok((x,y)) = rx_r.try_recv() {
@@ -226,7 +225,7 @@ pub fn gui_stream(user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8
         // Get framebuffer for the stream
         let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&stream).unwrap();
 
-        let mut planes: Vec<&[u8]> = framebuffer.data();
+        let planes: Vec<&[u8]> = framebuffer.data();
         let mut raw_planes: Vec<u8> = Vec::with_capacity(BYTES_PER_RAW_FRAME);
         for p in &planes {
             raw_planes.extend_from_slice(p);
@@ -273,7 +272,7 @@ pub fn record(user_conf: &Config) {
     // Can set capture size here (but it will just downsample unless a supported
     // capture resolution/format is chosen).
     // I'm using the 2x2 binned output res of 2028x1520 because it supports 30 fps
-    let mut cfg = &mut cfgs.get_mut(0).unwrap();
+    let cfg = &mut cfgs.get_mut(0).unwrap();
     cfg.set_size(Size { width: 2028, height: 1520 });
     
     // Validate config
@@ -313,7 +312,7 @@ pub fn record(user_conf: &Config) {
     //
     // Check the user-specified config for controls
     // that can be set globally (not per request)
-    let globals = global_config(&user_conf);
+    let globals = global_config(user_conf);
 
     // Start the camera (finalize configuration and permit queue_request() calls)
     // We pass an Option<ControlList> as the parameter
@@ -333,7 +332,7 @@ pub fn record(user_conf: &Config) {
 
     // Set the IMX500 ROI (so that we crop instead of scaling before passing into
     // the NPU).
-    match set_roi(&user_conf) {
+    match set_roi(user_conf) {
         Ok(_) => {
             println!(
                 "IMX500 ROI set to x:{}, y:{}, w:{}, h:{}\n",
@@ -354,7 +353,7 @@ pub fn record(user_conf: &Config) {
     // Callback executed when frame is captured
     cam.on_request_completed(move |req: Request| {
         if req.status() == RequestStatus::Complete {
-            let Some(tensor) = read_imx500_tensor_by_id(&req) else {
+            let Some(_tensor) = read_imx500_tensor_by_id(&req) else {
                 panic!("No tensor len returned, IMX500 isn't working!");
             };
             //println!("{:?}", tensor.len());
@@ -368,7 +367,7 @@ pub fn record(user_conf: &Config) {
     }
 
     // Open pipe for ffmpeg conversion
-    let (mut reader, mut writer) = pipe().expect("Couldn't open pipe to ffmpeg");
+    let (reader, mut writer) = pipe().expect("Couldn't open pipe to ffmpeg");
 
     // Start ffmpeg
     let mut ffmpeg_cmd = Command::new("ffmpeg");
@@ -382,7 +381,7 @@ pub fn record(user_conf: &Config) {
         .arg(&user_conf.filename)
         .stdin(reader); // pass the read end of the pipe
 
-    let mut ffmpeg_proc = ffmpeg_cmd.spawn().expect("Couldn't start ffmpeg thread");
+    ffmpeg_cmd.spawn().expect("Couldn't start ffmpeg thread");
 
     // Open file for writing frame timestamps
     let timestamp_filename = user_conf.filename.clone();
@@ -392,15 +391,16 @@ pub fn record(user_conf: &Config) {
         .read(false)
         .write(true)
         .create(true)
+        .truncate(true)
         .open(timestamp_filename)
         .context("open timestamp file w")
-        .expect("oops");
+        .expect("oops (timestamp file creation)");
     // Check exactly when we are starting in nanoseconds since 1/1/1970
     let system_start_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
         .expect("System time is before 1/1/1970");
 
-    timestamp_file.write(format!("System time recorded at capture start (ns since 1/1/1970): {}\n", system_start_time.as_nanos()).as_bytes());
-    timestamp_file.write("Remaining lines each contain #ns since start time\n".as_bytes());
+    timestamp_file.write_all(format!("System time recorded at capture start (ns since 1/1/1970): {}\n", system_start_time.as_nanos()).as_bytes()).expect("Couldn't write initial line to timestamp file");
+    timestamp_file.write_all("Remaining lines each contain #ns since start time\n".as_bytes()).expect("Couldn't write second line to timestamp file");
 
     // Need to also store an Instant that we are starting, so we can use elapsed() to check the
     // diff
@@ -415,14 +415,14 @@ pub fn record(user_conf: &Config) {
         // close to the time when the photons hit the sensor as possible
         let loop_time = start_time.elapsed();
         let loop_time = format!("{}\n", loop_time.as_nanos());
-        timestamp_file.write(loop_time.as_bytes());
+        let _ = timestamp_file.write_all(loop_time.as_bytes());
 
         // Get framebuffer for the stream
         let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&stream).unwrap();
 
         // Pull out the data and crop the frame
-        let mut planes: Vec<&[u8]> = framebuffer.data();
-        let cropped_planes: Vec<u8> = crop_frame(planes, y_stride as usize, &user_conf);
+        let planes: Vec<&[u8]> = framebuffer.data();
+        let cropped_planes: Vec<u8> = crop_frame(planes, y_stride as usize, user_conf);
 
         // Send over the pipe to ffmpeg
         writer.write_all(&cropped_planes[..]).expect("Couldn't write frame to ffmpeg pipe");
@@ -431,8 +431,6 @@ pub fn record(user_conf: &Config) {
         req.reuse(ReuseFlag::REUSE_BUFFERS);
         cam.queue_request(req).unwrap();
     }
-    drop(writer);
-    ffmpeg_proc.wait().expect("Couldn't wrap up ffmpeg");
 }
 
 /// Returns a UniquePtr<ControlList> (pretty sure this is an abstraction of a concept from C)
@@ -458,7 +456,7 @@ fn global_config(_user_conf: &Config) -> UniquePtr<ControlList> {
 
 /// Handles frame cropping (for saving or streaming). Needs y_stride from the original Y plane,
 /// so that we can account for the zero padding on left/right that the camera does
-fn crop_frame<'a>(mut planes: Vec<&'a [u8]>, y_stride: usize, user_conf: &Config) -> Vec<u8> {
+fn crop_frame(planes: Vec<&[u8]>, y_stride: usize, user_conf: &Config) -> Vec<u8> {
     let w: usize;
     let h: usize;
     let mut x: usize;
@@ -489,8 +487,8 @@ fn crop_frame<'a>(mut planes: Vec<&'a [u8]>, y_stride: usize, user_conf: &Config
         w = FIRST_CROP_W as usize;
         h = FIRST_CROP_H as usize;
         // If we haven't set the ROI yet, default to 480x480 in the center of the frame
-        x = 774 as usize;
-        y = 520 as usize;
+        x = 774_usize;
+        y = 520_usize;
     }
     // planes contains Y, U, and V planes. Y is double the height/width and stride
     let y_plane = planes[0];
@@ -555,15 +553,15 @@ fn read_imx500_tensor_by_id(req: &Request) -> Option<Vec<f32>> {
                 // The input tensor (only works if the enable input tensor control is set)
                 // Currently returning this one to the request callback, but that will change
                 // to the output tensor once debugging and whatnot is finished.
-                if let ControlValue::Byte(bytes) = val {
-                    if bytes.len() % 4 == 0 { // make sure value is 32 bit
+                if let ControlValue::Byte(bytes) = val
+                    && bytes.len() % 4 == 0 { // make sure value is 32 bit
                         let floats: Vec<f32> =
                             // split the bytes into 4 chunks of 4 and map each to f32
                             bytes.chunks_exact(4) 
                                 .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
                                 .collect();
                         return Some(floats);
-                    }
+                    
                 }
             },
             CNN_KPI_INFO_ID => {

@@ -12,7 +12,6 @@ use crate::{
     BYTES_PER_FIRST_CROP_FRAME,
     CROP_W, CROP_H,
 };
-use crossbeam_channel;
 use eframe::egui::{
     self,
     ColorImage,
@@ -28,10 +27,7 @@ use eframe::egui::{
 };
 use std::{
     cmp::max,
-    error::Error,
     sync::{
-        Arc,
-        Mutex,
         mpsc::{
             Sender,
             channel,
@@ -49,35 +45,35 @@ use std::{
 
 mod style;
 
-/// Hold the coordinates of the user-defined selection
-pub struct Selection {
-    x: usize,
-    y: usize,
-}
+// /// Hold the coordinates of the user-defined selection
+//pub struct Selection {
+    //x: usize,
+    //y: usize,
+//}
 
-impl Selection {
-    /// Default constructor
-    pub fn default() -> Self {
+//impl Selection {
+    // Default constructor
+    //pub fn default() -> Self {
         // Default selection values
-        let x: usize = 0;
-        let y: usize = 0;
-
-        Self { x, y }
-    }
-
+        //let x: usize = 0;
+        //let y: usize = 0;
+//
+        //Self { x, y }
+    //}
+//
     // Getter and setter
-    pub fn get_selection(&self) -> [usize; 2] {
-        [self.x, self.y]
-    }
-
-    /// selection should be a slice of 2 usize in the order x, y
-    pub fn set_selection(&mut self, selection: &[usize]) -> Result<(), Box<dyn Error>> {
-        self.x = selection[0];
-        self.y = selection[1];
-        Ok(())
-    }
-
-}
+    //pub fn get_selection(&self) -> [usize; 2] {
+        //[self.x, self.y]
+    //}
+//
+    // selection should be a slice of 2 usize in the order x, y
+    //pub fn set_selection(&mut self, selection: &[usize]) -> Result<(), Box<dyn Error>> {
+        //self.x = selection[0];
+        //self.y = selection[1];
+        //Ok(())
+    //}
+//
+//}
 
 /// This is where we set attributes to persist between loops
 ///
@@ -99,7 +95,7 @@ pub struct GuiApp {
 }
 
 impl GuiApp {
-    pub fn new(ctx: &eframe::CreationContext) -> Self {
+    pub fn new(_ctx: &eframe::CreationContext) -> Self {
         // Spawn a channel to communicate between recording and GUI rendering threads
         let (tx, rx) = crossbeam_channel::bounded::<Vec<u8>>(2);
 
@@ -153,14 +149,13 @@ impl GuiApp {
         ctx.request_repaint();
 
         egui::CentralPanel::default()
-            .frame(style::set_frame_margins(&ctx))
+            .frame(style::set_frame_margins(ctx))
             .show(ctx, |ui| {
             if let Some(tex) = &self.tex {
                 // Fit while preserving aspect ratio.
-                let tex_size = egui::vec2(FIRST_CROP_W as f32, FIRST_CROP_H as f32);
                 let curr_frame = ui.image((tex.id(), tex.size_vec2()));
 
-                let (mut x, mut y) = self.selection;
+                let (x, y) = self.selection;
                 // Draw the ROI selection rectangle. Start by determining bounds on the
                 // current frame. We will need to subtract the top left point of the
                 // frame from the selection top left point (because there is a bit of
@@ -204,7 +199,7 @@ impl GuiApp {
                     let top_left = top_left - frame_top_left;
                     let top_left: (u32, u32) = (top_left.x as u32, top_left.y as u32);
                     let tx_r = self.tx_r.take().unwrap();
-                    tx_r.send(top_left);
+                    let _ = tx_r.send(top_left); // ignore error if we can't send (keep trying)
 
                     // Wrap up the camera work
                     let cam_thread = self.cam_thread.take().unwrap();
@@ -215,14 +210,14 @@ impl GuiApp {
 
                     // Shrink the window somewhat, it doesn't need as much real-estate now
                     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(480.0, 360.0)));
-                    return;
                 }
 
-            }        });
+            }        
+        });
     }
 
     /// Once the ROI is selected, wrap things up and start recording
-    fn roi_selection_wrapup(&mut self, ctx: &egui::Context) {
+    fn roi_selection_wrapup(&mut self, _ctx: &egui::Context) {
         // Once gui_stream exits, set the ROI that was returned
         // and start recording.
         let mut user_conf = Config::default();
@@ -246,7 +241,7 @@ impl GuiApp {
     /// display a status message
     fn recording_progress(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(style::set_frame_margins(&ctx))
+            .frame(style::set_frame_margins(ctx))
             .show(ctx, |ui| {
                 // Report the selected ROI
                 ui.label(RichText::new("ROI selected: ").strong().size(18.0));
@@ -305,7 +300,7 @@ impl GuiApp {
 }
 
 impl eframe::App for GuiApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // If the camera thread isn't set anymore, wrap up the ROI selection
         // and start the recording thread
         if self.cam_thread.is_none() {
@@ -350,7 +345,8 @@ fn clamp8(x: i32) -> u8 {
 
 /// Take a raw frame and convert to RGBA for display
 fn convert_to_rgba(frame: Option<Vec<u8>>) -> Option<Vec<u8>> {
-    if frame.is_none() { return None }
+    //if frame.is_none() { return None }
+    frame.as_ref()?;
 
     let frame = frame.unwrap();
     let num_bytes = frame.len();
@@ -380,30 +376,30 @@ fn convert_to_rgba(frame: Option<Vec<u8>>) -> Option<Vec<u8>> {
 
         // chroma coordinates (subsampled 2x2)
         let cy = y / 2;
-        let cw = (width + 1) / 2;
+        let cw = width.div_ceil(2); // equiv to (width + 1) / 2
 
         let u_row = &u_plane[cy * uv_stride .. cy * uv_stride + cw];
         let v_row = &v_plane[cy * uv_stride .. cy * uv_stride + cw];
 
         for x in 0..width {
-            let Y  = y_row[x] as i32;
-            let U  = u_row[x / 2] as i32;
-            let V  = v_row[x / 2] as i32;
+            let y_  = y_row[x] as i32;
+            let u  = u_row[x / 2] as i32;
+            let v  = v_row[x / 2] as i32;
 
             // Video-range BT.601
             // For full-range, replace with:
             // let c = Y - 0; let d = U - 128; let e = V - 128;
             // let r = (298*c + 409*e + 128) >> 8; etc.
-            let c = max(0, Y - 16);
-            let d = U - 128;
-            let e = V - 128;
+            let c = max(0, y_ - 16);
+            let d = u - 128;
+            let e = v - 128;
 
             let r = (298*c + 409*e + 128) >> 8;
             let g = (298*c - 100*d - 208*e + 128) >> 8;
             let b = (298*c + 516*d + 128) >> 8;
 
             let o = (y * width + x) * 4;
-            out[o + 0] = clamp8(r);
+            out[o] = clamp8(r);
             out[o + 1] = clamp8(g);
             out[o + 2] = clamp8(b);
             out[o + 3] = 255;
