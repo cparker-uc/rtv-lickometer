@@ -3,7 +3,6 @@ use crate::{
     Config,
     // Constants
     BYTES_PER_RAW_FRAME,
-    CROP_W, CROP_H,
     FIRST_CROP_W, FIRST_CROP_H, // intermediate crop size for GUI
     TRAINING_CROP_W, TRAINING_CROP_H,
 };
@@ -12,7 +11,6 @@ use libcamera::{
     camera::{ActiveCamera, CameraConfigurationStatus},
     camera_manager::CameraManager, 
     control::ControlList,
-    control_value::ControlValue,
     controls,
     framebuffer_allocator::{FrameBuffer, FrameBufferAllocator},
     framebuffer_map::MemoryMappedFrameBuffer,
@@ -23,14 +21,9 @@ use libcamera::{
     stream::StreamRole,
     utils::UniquePtr,
 };
-use libcamera_sys;
 use std::{
-    error::Error,
-    fs::{self, OpenOptions, File},
+    fs::OpenOptions,
     io::{Write, pipe},
-    mem::zeroed,
-    os::fd::AsRawFd,
-    path::Path,
     process::Command,
     sync::mpsc::{
         channel, 
@@ -42,70 +35,10 @@ use std::{
         SystemTime,
     },
 };
-use v4l::{
-    Device, Control, control::Value,
-};
-use v4l2_sys_mit as v4l2;
-
-// Low-level libcamera-sys representations of the IMX500 specific metadata
-const CNN_OUTPUT_ID: u32 = libcamera_sys::CNN_OUTPUT_TENSOR;
-const CNN_OUTPUT_INFO_ID: u32 = libcamera_sys::CNN_OUTPUT_TENSOR_INFO;
-const CNN_INPUT_ID: u32 = libcamera_sys::CNN_INPUT_TENSOR;
-const CNN_INPUT_INFO_ID: u32 = libcamera_sys::CNN_INPUT_TENSOR_INFO;
-const CNN_ENABLE_INPUT_TENSOR_ID: u32 = libcamera_sys::CNN_ENABLE_INPUT_TENSOR;
-const CNN_KPI_INFO_ID: u32 = libcamera_sys::CNN_KPI_INFO;
 
 // Define MJPEG format. From the libcamera-rs examples: drm-fourcc doesn't include
 // an enum variant for MJPEG, so we construct it manually from the raw fourcc identifier
 const PIXEL_FORMAT_YU12: PixelFormat = PixelFormat::new(u32::from_le_bytes([b'Y', b'U', b'1', b'2']), 0);
-
-/// Open the IMX500 with V4L and write the CNN file to the NPU
-/// Not using user_conf at the moment, but it will eventually hold
-/// the CNN rpk filename (if we don't fully abandon IMX500 b/c
-/// of the integral IR filter)
-pub fn load_firmware(_user_conf: &Config) -> Result<(), Box<dyn Error>> {
-    // Loop through the /dev directory and check the devices
-    let mut dev_dir = fs::read_dir(Path::new("/dev/"))?;
-    let mut subdev_num: usize = 0;
-    while let Some(Ok(d)) = dev_dir.next() {
-        // If the current entry has v4l-subdev in the path,
-        // check it for IMX500 controls
-        let d_path = d.path();
-        let d_str = d_path.to_str().unwrap();
-        if d_str.contains("v4l-subdev") {
-            let dev = Device::with_path(d.path()).expect("couldn't open device");
-            if dev.query_controls().is_ok() {
-                let split_path = d_str.split("subdev");
-                let num = split_path.last().unwrap();
-                subdev_num = num.parse()?;
-            }
-        }
-    }
-    let subdev_path = format!("/dev/v4l-subdev{}", subdev_num);
-    println!("Opening {} to load firmware", subdev_path);
-    let imx500 = Device::with_path(Path::new(&subdev_path))
-                              .expect("Failed to open device");
-    let ctrls = imx500.query_controls()?;
-
-    // Get the correct control based on the name
-    let Some(ctrl) = ctrls.iter().find(|item| item.name == "IMX500 Network Firmware File FD") else {
-        panic!("No IMX500 firmware file control found");
-    };
-
-    // Grab the CNN file
-    // TODO: Make this a CLI option
-    let rpk_file: File = OpenOptions::new()
-        .read(true)
-        .open("/usr/share/imx500-models/imx500_network_inputtensoronly.rpk")
-        .expect("Couldn't open requested CNN file");
-    let rpk_fd: i32 = rpk_file.as_raw_fd();
-
-    let rpk_fd: Value = Value::Integer(rpk_fd.into());
-    let ctrl = Control { id: ctrl.id, value: rpk_fd };
-    imx500.set_control(ctrl).unwrap();
-
-    Ok(())
-}
 
 /// Stream to the egui GUI for ROI selection
 pub fn gui_stream(user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_r: Receiver<(u32, u32)>) -> (u32, u32) {
@@ -137,9 +70,12 @@ pub fn gui_stream(user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8
 
     // Can set capture size here (but it will just downsample unless a supported
     // capture resolution/format is chosen).
-    // I'm using the 2x2 binned output res of 2028x1520 because it supports 30 fps
+    // The supported resolutions for the IMX708 are:
+    //  - 2304x1296 @ 56  Hz
+    //  - 2304x1296 @ 30  Hz
+    //  - 1536x864  @ 120 Hz
     let cfg = &mut cfgs.get_mut(0).unwrap();
-    cfg.set_size(Size { width: 2028, height: 1520 });
+    cfg.set_size(Size { width: 2304, height: 1296 });
     
     // Validate config
     match cfgs.validate() {
@@ -271,9 +207,12 @@ pub fn record(user_conf: &Config) {
 
     // Can set capture size here (but it will just downsample unless a supported
     // capture resolution/format is chosen).
-    // I'm using the 2x2 binned output res of 2028x1520 because it supports 30 fps
+    // The supported resolutions for the IMX708 are:
+    //  - 2304x1296 @ 56  Hz
+    //  - 2304x1296 @ 30  Hz
+    //  - 1536x864  @ 120 Hz
     let cfg = &mut cfgs.get_mut(0).unwrap();
-    cfg.set_size(Size { width: 2028, height: 1520 });
+    cfg.set_size(Size { width: 2304, height: 1296 });
     
     // Validate config
     match cfgs.validate() {
@@ -330,33 +269,13 @@ pub fn record(user_conf: &Config) {
         })
         .collect::<Vec<_>>();
 
-    // Set the IMX500 ROI (so that we crop instead of scaling before passing into
-    // the NPU).
-    match set_roi(user_conf) {
-        Ok(_) => {
-            println!(
-                "IMX500 ROI set to x:{}, y:{}, w:{}, h:{}\n",
-                &user_conf.crop_x,
-                &user_conf.crop_y,
-                CROP_W, CROP_H,
-            );
-        },
-        Err(_e) => {
-            eprintln!("Couldn't set IMX500 ROI!");
-            std::process::exit(1);
-        }
-    }
-
     // Multiple producer single consumer channel for communication with the recording thread
     let (tx, rx) = channel();
 
     // Callback executed when frame is captured
     cam.on_request_completed(move |req: Request| {
         if req.status() == RequestStatus::Complete {
-            let Some(_tensor) = read_imx500_tensor_by_id(&req) else {
-                panic!("No tensor len returned, IMX500 isn't working!");
-            };
-            //println!("{:?}", tensor.len());
+            // Where we would have polled the IMX500 NPU results
         }
         tx.send(req).unwrap();
     });
@@ -438,18 +357,10 @@ pub fn record(user_conf: &Config) {
 fn global_config(_user_conf: &Config) -> UniquePtr<ControlList> {
     let mut globals = ControlList::new();
 
-    // Unfortunately, with the IMX500, we are clamped to 30 fps :( This may be necessary
-    // with a different camera, so I'll leave it here for now.
-    // Set framerate (we have to tell it how many microseconds per frame, not a rate in Hz)
-    let target_fps = 30.0;
+    let target_fps = 56.0;
     let frame_duration = (1_000_000.0 / target_fps) as i64;
 
     globals.set(controls::FrameDurationLimits([frame_duration, frame_duration])).unwrap();
-
-    // Enable caching the input to CNN processing with IMX500 specific control
-    // (This just lets us read out CnnInputTensor after the request is complete.)
-    globals.set_raw(CNN_ENABLE_INPUT_TENSOR_ID, true.into()).unwrap();
-    //println!("{:#?}", globals.get_raw(CNN_ENABLE_INPUT_TENSOR_ID, )); // check if it set
 
     globals
 }
@@ -528,108 +439,4 @@ fn crop_frame(planes: Vec<&[u8]>, y_stride: usize, user_conf: &Config) -> Vec<u8
         out.extend_from_slice(&v_plane[row_start_idx..row_start_idx + uvw]);
     }
     out
-}
-
-/// Read imx500-specific controls by the raw ID (since these are
-/// not generated automatically as actual controls in libcamera-rs)
-fn read_imx500_tensor_by_id(req: &Request) -> Option<Vec<f32>> {
-    let md = req.metadata();
-    let md_iter = md.into_iter(); 
-    for (id, val) in md_iter {
-        match id {
-            CNN_OUTPUT_INFO_ID => {
-                // Information about the shape and contents of the output tensor, I think
-                //println!("{:?}", val);
-            },
-            CNN_OUTPUT_ID => {
-                // The output tensor (which I believe is received as a slice of bytes)
-                //println!("Output tensor");
-            },
-            CNN_INPUT_INFO_ID => {
-                // Information about the shape and contents of the input tensor, I think
-                //println!("{:?}", val);
-            },
-            CNN_INPUT_ID => {
-                // The input tensor (only works if the enable input tensor control is set)
-                // Currently returning this one to the request callback, but that will change
-                // to the output tensor once debugging and whatnot is finished.
-                if let ControlValue::Byte(bytes) = val
-                    && bytes.len() % 4 == 0 { // make sure value is 32 bit
-                        let floats: Vec<f32> =
-                            // split the bytes into 4 chunks of 4 and map each to f32
-                            bytes.chunks_exact(4) 
-                                .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
-                                .collect();
-                        return Some(floats);
-                    
-                }
-            },
-            CNN_KPI_INFO_ID => {
-                // Information about NPU performance (processing time, etc.)
-                //println!("{:#?}", val);
-            },
-            _ => {
-                //println!("Something other than input or output tensors");
-            }
-        };
-    }
-    None
-}
-
-/// Set custom region of interest for the NPU crop (so we don't just scale the
-/// entire frame). This function was drafted by ChatGPT, and I'm no expert on
-/// *nix ioctl. However, it seems to work and I think it's ~robust.
-///
-/// Safety:
-///
-/// Will crash if the device isn't found or cannot be written to
-fn set_roi(user_conf: &Config) -> anyhow::Result<()> {
-    // VIDIOC_S/TRY_EXT_CTRLS
-    // Uses the macro to define functions in this scope (which we call below)
-    // called vidioc_s_ext_ctrls and vidioc_try_ext_ctrls
-    nix::ioctl_readwrite!(vidioc_s_ext_ctrls,   b'V', 71, v4l2::v4l2_ext_controls);
-    nix::ioctl_readwrite!(vidioc_try_ext_ctrls, b'V', 72, v4l2::v4l2_ext_controls);
-
-    // Open the subdevice as a raw file handle (expected by ioctl)
-    let f = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/v4l-subdev2")
-        .context("open subdev rw")?;
-    let fd = f.as_raw_fd();
-
-    // Per QUERY_EXT_CTRL: elem_size=4, elems=4 -> 16 bytes total
-    let mut roi: [u32; 4] = [
-        user_conf.crop_x,
-        user_conf.crop_y,
-        CROP_W, CROP_H,
-    ];
-
-    // One control with payload pointer
-    // Note: mem::zeroed() initializes a struct with all mem as zeros (unsafe)
-    let mut c: v4l2::v4l2_ext_control = unsafe { zeroed() };
-    c.id = 9_971_968; // 9971968 "IMX500 Inference Windows"
-    c.size = (roi.len() * std::mem::size_of::<u32>()) as u32; // 16
-
-    // These dunder attrs are a mystery to me, currently. Some weird *nix
-    // ioctl stuff
-    c.__bindgen_anon_1.p_u32 = roi.as_mut_ptr();    // union field
-
-    // Wrapper (note: union for which/ctrl_class; reserved is [u32; 1])
-    let mut ctrls: v4l2::v4l2_ext_controls = unsafe { zeroed() };
-    ctrls.__bindgen_anon_1.which = v4l2::V4L2_CTRL_WHICH_CUR_VAL; // 0
-    ctrls.count = 1;
-    ctrls.error_idx = 0;
-    ctrls.reserved = [0];     // length 1
-    ctrls.request_fd = 0;
-    ctrls.controls = &mut c as *mut _;
-
-    unsafe {
-        // Optional: validate first
-        vidioc_try_ext_ctrls(fd, &mut ctrls).context("VIDIOC_TRY_EXT_CTRLS")?;
-        // Apply
-        vidioc_s_ext_ctrls(fd, &mut ctrls).context("VIDIOC_S_EXT_CTRLS")?;
-    }
-
-    Ok(())
 }

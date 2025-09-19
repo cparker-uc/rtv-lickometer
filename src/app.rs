@@ -1,7 +1,6 @@
 use crate::{
     Config,
     record::{
-        load_firmware,
         gui_stream,
         record,
     },
@@ -82,14 +81,6 @@ impl GuiApp {
             // Initialize a new default Config
             let user_conf: Config = Config::default();
 
-            // Load firmware with V4L2 into IMX500 (the CNN rpk file)
-            match load_firmware(&user_conf) {
-                Ok(_) => println!("IMX500 finished loading CNN"),
-                Err(_e) => {
-                    eprintln!("Couldn't load CNN into IMX500!");
-                    std::process::exit(1);
-                },
-            }
             gui_stream(user_conf, tx, rx_r);
         });
 
