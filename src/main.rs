@@ -1,3 +1,4 @@
+// This branch contains the commands for setting NPU controls in IMX500 still
 fn main() {
     // GUI options
     let native_options = eframe::NativeOptions {
