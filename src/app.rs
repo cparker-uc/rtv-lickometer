@@ -45,36 +45,6 @@ use std::{
 
 mod style;
 
-// /// Hold the coordinates of the user-defined selection
-//pub struct Selection {
-    //x: usize,
-    //y: usize,
-//}
-
-//impl Selection {
-    // Default constructor
-    //pub fn default() -> Self {
-        // Default selection values
-        //let x: usize = 0;
-        //let y: usize = 0;
-//
-        //Self { x, y }
-    //}
-//
-    // Getter and setter
-    //pub fn get_selection(&self) -> [usize; 2] {
-        //[self.x, self.y]
-    //}
-//
-    // selection should be a slice of 2 usize in the order x, y
-    //pub fn set_selection(&mut self, selection: &[usize]) -> Result<(), Box<dyn Error>> {
-        //self.x = selection[0];
-        //self.y = selection[1];
-        //Ok(())
-    //}
-//
-//}
-
 /// This is where we set attributes to persist between loops
 ///
 /// Things are wrapped in Options so that we can take them and
