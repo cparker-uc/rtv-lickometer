@@ -2,9 +2,10 @@ use anyhow::Context;
 use crate::{
     Config,
     // Constants
+    RAW_W, RAW_H,
     BYTES_PER_RAW_FRAME,
     FIRST_CROP_W, FIRST_CROP_H, // intermediate crop size for GUI
-    TRAINING_CROP_W, TRAINING_CROP_H,
+    TRAINING_CROP_W, TRAINING_CROP_H, // crop with padding for training wiggle
 };
 use crossbeam_channel;
 use libcamera::{
@@ -361,6 +362,8 @@ fn global_config(_user_conf: &Config) -> UniquePtr<ControlList> {
     let frame_duration = (1_000_000.0 / target_fps) as i64;
 
     globals.set(controls::FrameDurationLimits([frame_duration, frame_duration])).unwrap();
+    globals.set(controls::AfMode::Continuous).unwrap();
+    globals.set(controls::AfRange::Macro).unwrap();
 
     globals
 }
@@ -382,24 +385,26 @@ fn crop_frame(planes: Vec<&[u8]>, y_stride: usize, user_conf: &Config) -> Vec<u8
         y = (user_conf.crop_y & !1) as usize;
 
         // During the training crop, we need to adjust x and y to account for the
-        // padding. 100 px => decrease x and y by 50 px each. We need to check
-        // that they will not go negative, though, or it may underflow
-        if x > 50usize {
-            x -= 50;
-        } else { x = 0usize }
-        if y > 50usize {
-            y -= 50;
-        } else { y = 0usize }
-
-        // Now we need to account for the pixels missing due to the intermediate crop
-        x += 774;
-        y += 520;
+        // padding. 100 px => decrease x and y by 50 px each. We also need to account
+        // for the pixels missing due to the intermediate crop, so we end up with
+        // for example:
+        // x: 2304 - 480 = 1980 / 2 = 990 - 50 = 940
+        // y: 1296 - 480 = 972 / 2 = 486 - 50 = 436
+        // Note that we still compute the x_tmp and y_tmp from the
+        // origin of the FIRST_CROP, rather than TRAINING_CROP
+        let x_tmp = (((RAW_W - FIRST_CROP_W) / 2) - 50) as usize;
+        x += x_tmp;
+        let y_tmp = (((RAW_H - FIRST_CROP_H) / 2) - 50) as usize;
+        y += y_tmp;
     } else { // if we haven't selected the ROI yet, don't crop as far
         w = FIRST_CROP_W as usize;
         h = FIRST_CROP_H as usize;
         // If we haven't set the ROI yet, default to 480x480 in the center of the frame
-        x = 774_usize;
-        y = 520_usize;
+        let x_tmp = ((RAW_W - FIRST_CROP_W) / 2) as usize;
+        x = x_tmp;
+        let y_tmp = ((RAW_H - FIRST_CROP_H) / 2) as usize;
+        y = y_tmp;
+        println!("x:{}, y:{}", x, y);
     }
     // planes contains Y, U, and V planes. Y is double the height/width and stride
     let y_plane = planes[0];

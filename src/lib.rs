@@ -5,8 +5,8 @@ pub mod record;
 
 // These should be constants because the camera can only record
 // at 30 fps in one resolution, and the NN will always need the same shape
-pub const RAW_W: u32 = 2028;
-pub const RAW_H: u32 = 1520;
+pub const RAW_W: u32 = 2304;
+pub const RAW_H: u32 = 1296;
 // Raw planes will have 10px padding on left/right
 pub const BYTES_PER_RAW_Y_PLANE: usize = ((RAW_W + 20) * RAW_H) as usize;
 pub const BYTES_PER_RAW_UV_PLANE: usize = ((RAW_W + 20) / 2 * RAW_H / 2) as usize;
