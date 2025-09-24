@@ -1,0 +1,24 @@
+[package]
+name = "rtv-lickometer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Camera recording crates
+libcamera = { git = "https://github.com/lit-robotics/libcamera-rs.git" }
+libcamera-sys = { git = "https://github.com/lit-robotics/libcamera-rs.git", package = "libcamera-sys" }
+v4l = { git = "https://github.com/raymanfx/libv4l-rs.git" }
+v4l2-sys-mit = "0.3.0"
+
+# GUI Crates
+eframe = "*"
+egui = "*"
+egui_extras = "*"
+
+# General deps
+libc = "0.2.175"
+anyhow = "1.0.99"
+nix = { version = "*", features = ["ioctl"] }
+hostname = "0.4.1"
+chrono = "0.4.41"
+crossbeam-channel = "0.5.15"
