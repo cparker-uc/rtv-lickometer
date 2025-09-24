@@ -63,7 +63,13 @@ class D3DNetwork(keras.Model):
     def __init__(self, base: keras.Model, skip_steps: int, *args, **kwargs):
         super().__init__(*args, inputs=base.inputs, outputs=base.outputs, **kwargs)
         self.skip_steps = skip_steps
-        self._step = tf.Variable(0, dtype=tf.int64, trainable=False)
+        self._step = self.add_weight(
+            shape=(),
+            initializer='zeros',
+            dtype=tf.int64,
+            trainable=False,
+            name="_step",
+        )
 
     def train_step(self, data):
         self._step.assign_add(1)

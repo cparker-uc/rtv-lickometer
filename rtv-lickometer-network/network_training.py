@@ -76,22 +76,24 @@ if __name__ == "__main__":
         ]
     )
     for idx,video in enumerate(videos):
+        print(f"Training video #{idx+1}")
         idx = idx + 2 # the task labels in cvat started at 2 (because I messed up number 1)
         y = np.array(labels[str(idx)])
         data = iio.imread(video, index=None)
 
         # Split the videos into smaller segments (10 per video)
         # and augment in 10 different ways
-        aug_num_old = 0
+        aug_num_old = -1
         for (data_inner,y_inner,aug_num) in dataset_gen(data,y):
             # If we are on to a new augmentation, reset the cache
             if aug_num > aug_num_old:
+                print(f"Augmentation #{aug_num+1}")
                 for v in model.non_trainable_variables:
                     if "cache" in v.name:
                         v.assign(np.zeros_like(v))
                     elif "_step" in v.name:
                         v.assign(0)
-
+                aug_num_old = aug_num
             data_inner = data_inner.reshape(-1,1,1,224,224)
             # We don't want to shuffle because the temporal information in adjacent frames is important
             # So just validate on the last 20% of frames
@@ -106,6 +108,7 @@ if __name__ == "__main__":
                     class_weight={0: 1.0, 1: 10.0},
             )
 
+        print("Training on full video (#{idx+1})")
         for v in model.non_trainable_variables:
             if "cache" in v.name:
                 v.assign(np.zeros_like(v))
@@ -128,9 +131,10 @@ if __name__ == "__main__":
         )
 
     # save the trained model
-    model.save(filepath=f"model_checkpoints/model{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.keras")
+    time_now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    model.save(filepath=f"model_checkpoints/model{time_now}.keras")
     # model.save(filepath="model.keras")
-    model.save(filepath=f"model_checkpoints/model{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.h5")
+    model.save(filepath=f"model_checkpoints/model{time_now}.h5")
 
     for v in model.non_trainable_variables:
         if "cache" in v.name:
