@@ -16,8 +16,7 @@ from vidaug import augmentors as va
 
 def dataset_gen(data, y):
     data_orig = copy(data)
-    # 10 random augmentations
-    for aug_num in range(5):
+    for aug_num in range(50):
         # Perform the sequence of augmentations and stack to a single grayscale array
         data = aug_seq(data_orig)
         data = np.stack(data, axis=0)
@@ -37,11 +36,11 @@ def main():
     log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     tensorboard_callback = keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
-    model = construct_model()
+    model = construct_model(skip_steps=100)
     model.compile(
         optimizer="adam",
         loss=keras.losses.BinaryCrossentropy(from_logits=True,),
-        metrics=['accuracy', keras.metrics.AUC],
+        metrics=['accuracy', keras.metrics.AUC(name="auc")],
     )
 
     # Load the labels
@@ -62,7 +61,9 @@ def main():
     # Load the video
     videos = ["finger_tap_training_data/picamera0_2025-09-19_11-59-22.mp4", "finger_tap_training_data/picamera0_2025-09-19_12-00-59.mp4", "finger_tap_training_data/picamera0_2025-09-19_12-02-28.mp4", "finger_tap_training_data/picamera0_2025-09-19_12-04-21.mp4",]
 
+    # Load weights from a previous run
     # model.load_weights("model.keras")
+
     # track if we are getting better at the test video, if not, stop training
     # prev_test_loss = np.inf
     # curr_test_loss = 1e6
@@ -70,8 +71,8 @@ def main():
 
     for idx,video in enumerate(videos):
         print(f"Training video #{idx+1}", flush=True)
-        idx = idx + 2 # the task labels in cvat started at 2 (because I messed up number 1)
-        y = np.array(labels[str(idx)])
+        label_idx = idx + 2 # the task labels in cvat started at 2 (because I messed up number 1)
+        y = np.array(labels[str(label_idx)])
         data = iio.imread(video, index=None)
 
         # Split the videos into smaller segments (10 per video)
@@ -101,27 +102,27 @@ def main():
                     class_weight={0: 1.0, 1: 10.0},
             )
 
-        print(f"Training on full video (#{idx+1})", flush=True)
-        for v in model.non_trainable_variables:
-            if "cache" in v.name:
-                v.assign(np.zeros_like(v))
-            elif "_step" in v.name:
-                v.assign(0)
+#       print(f"Training on full video (#{idx+1})", flush=True)
+#       for v in model.non_trainable_variables:
+#           if "cache" in v.name:
+#               v.assign(np.zeros_like(v))
+#           elif "_step" in v.name:
+#               v.assign(0)
 
-        # Perform the sequence of augmentations and stack to a single grayscale array
-        data = aug_seq(data)
-        data = np.stack(data, axis=0)
-        data = np.dot(data, [0.2989, 0.5870, 0.1140]) # grayscale
+#       # Perform the sequence of augmentations and stack to a single grayscale array
+#       data = aug_seq(data)
+#       data = np.stack(data, axis=0)
+#       data = np.dot(data, [0.2989, 0.5870, 0.1140]) # grayscale
 
-        model.fit(
-                data.reshape(-1,1,1,224,224),
-                np.array(y), 
-                epochs=1,
-                batch_size=1,
-                # validation_data=(valid_data, valid_y),
-                callbacks=[tensorboard_callback],
-                class_weight={0: 1.0, 1: 10.0},
-        )
+#       model.fit(
+#               data.reshape(-1,1,1,224,224),
+#               np.array(y), 
+#               epochs=1,
+#               batch_size=1,
+#               # validation_data=(valid_data, valid_y),
+#               callbacks=[tensorboard_callback],
+#               class_weight={0: 1.0, 1: 10.0},
+#       )
 
     # save the trained model
     if not os.path.isdir("model_checkpoints"):
@@ -142,7 +143,7 @@ def main():
     # frame_crop = np.random.randint(low=0, high=100, size=(2,))
     frame_crop = [50, 50] # user-defined crop from training video gathering
     test_data = np.dot(test_data, [0.2989, 0.5870, 0.1140]) # grayscale
-    test_data = test_data.reshape(-1,1,1,224,224)[...,frame_crop[0]:frame_crop[0]+224,frame_crop[1]:frame_crop[1]+224]
+    test_data = test_data.reshape(-1,1,1,324,324)[...,frame_crop[0]:frame_crop[0]+224,frame_crop[1]:frame_crop[1]+224]
     test_y = labels['6']
 
     # prev_test_loss = curr_test_loss
@@ -161,8 +162,10 @@ if __name__ == "__main__":
     aug_seq = va.Sequential(
         [
             va.RandomCrop(size=(224,224)),
-            va.RandomRotate(degrees=10),
+            va.RandomRotate(degrees=45),
             sometimes(va.HorizontalFlip()),
+            sometimes(va.VerticalFlip()),
+            sometimes(va.Pepper()),
         ]
     )
 
