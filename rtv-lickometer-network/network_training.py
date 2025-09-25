@@ -100,7 +100,7 @@ def main():
                     batch_size=1,
                     validation_data=(valid_data.reshape(-1,1,1,224,224), valid_y),
                     callbacks=[tensorboard_callback],
-                    class_weight={0: 1.0, 1: 10.0},
+                    class_weight={0: 1.0, 1: 100.0},
             )
 
         print(f"Training on full video (#{idx+1})", flush=True)
@@ -122,7 +122,7 @@ def main():
                 batch_size=1,
                 # validation_data=(valid_data, valid_y),
                 callbacks=[tensorboard_callback],
-                class_weight={0: 1.0, 1: 10.0},
+                class_weight={0: 1.0, 1: 100.0},
         )
 
     # save the trained model
