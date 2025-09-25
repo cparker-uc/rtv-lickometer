@@ -77,7 +77,7 @@ if __name__ == "__main__":
         ]
     )
     for idx,video in enumerate(videos):
-        print(f"Training video #{idx+1}")
+        print(f"Training video #{idx+1}", flush=True)
         idx = idx + 2 # the task labels in cvat started at 2 (because I messed up number 1)
         y = np.array(labels[str(idx)])
         data = iio.imread(video, index=None)
@@ -88,7 +88,7 @@ if __name__ == "__main__":
         for (data_inner,y_inner,aug_num) in dataset_gen(data,y):
             # If we are on to a new augmentation, reset the cache
             if aug_num > aug_num_old:
-                print(f"Augmentation #{aug_num+1}")
+                print(f"Augmentation #{aug_num+1}", flush=True)
                 for v in model.non_trainable_variables:
                     if "cache" in v.name:
                         v.assign(np.zeros_like(v))
@@ -109,7 +109,7 @@ if __name__ == "__main__":
                     class_weight={0: 1.0, 1: 10.0},
             )
 
-        print(f"Training on full video (#{idx+1})")
+        print(f"Training on full video (#{idx+1})", flush=True)
         for v in model.non_trainable_variables:
             if "cache" in v.name:
                 v.assign(np.zeros_like(v))
