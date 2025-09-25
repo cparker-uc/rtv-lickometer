@@ -88,7 +88,6 @@ def main():
                     elif "_step" in v.name:
                         v.assign(0)
                 aug_num_old = aug_num
-                iio.imwrite(f"augmented_videos/video{idx+1}_aug{aug_num+1}.mp4", data_inner)
             data_inner = data_inner.reshape(-1,1,1,224,224)
             # We don't want to shuffle because the temporal information in adjacent frames is important
             # So just validate on the last 20% of frames
