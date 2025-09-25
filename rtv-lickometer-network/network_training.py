@@ -1,7 +1,8 @@
 from collections import defaultdict
-import datetime
-import random
 from copy import copy
+import datetime
+import os
+import random
 
 from d3d_network import construct_model
 
@@ -108,7 +109,7 @@ if __name__ == "__main__":
                     class_weight={0: 1.0, 1: 10.0},
             )
 
-        print("Training on full video (#{idx+1})")
+        print(f"Training on full video (#{idx+1})")
         for v in model.non_trainable_variables:
             if "cache" in v.name:
                 v.assign(np.zeros_like(v))
@@ -131,6 +132,8 @@ if __name__ == "__main__":
         )
 
     # save the trained model
+    if not os.path.isdir("model_checkpoints"):
+        os.mkdir("model_checkpoints")
     time_now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     model.save(filepath=f"model_checkpoints/model{time_now}.keras")
     # model.save(filepath="model.keras")
