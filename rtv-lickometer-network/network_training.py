@@ -9,6 +9,7 @@ from d3d_network import construct_model
 import xml.etree.ElementTree as ET
 import imageio.v3 as iio
 import keras
+import tensorflow as tf
 import numpy as np
 from sklearn.model_selection import train_test_split
 from vidaug import augmentors as va
@@ -16,13 +17,13 @@ from vidaug import augmentors as va
 def dataset_gen(data, y):
     data_orig = copy(data)
     # 10 random augmentations
-    for aug_num in range(10):
+    for aug_num in range(5):
         # Perform the sequence of augmentations and stack to a single grayscale array
         data = aug_seq(data_orig)
         data = np.stack(data, axis=0)
         data = np.dot(data, [0.2989, 0.5870, 0.1140]) # grayscale
         # split to sub-videos (randomly ordered)
-        n_splits = 10
+        n_splits = 5
         data_ = np.array_split(data, n_splits, axis=0,)
         y_ = np.array_split(y, n_splits)
         data = list(zip(data_, y_))
@@ -31,7 +32,7 @@ def dataset_gen(data, y):
             yield(d,l,aug_num)
 
 
-if __name__ == "__main__":
+def main():
     # For performance tracking
     log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     tensorboard_callback = keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
@@ -67,15 +68,6 @@ if __name__ == "__main__":
     # curr_test_loss = 1e6
     # while prev_test_loss > curr_test_loss:
 
-    # Using vidaug package for video augmentation
-    sometimes = lambda aug: va.Sometimes(0.5, aug)
-    aug_seq = va.Sequential(
-        [
-            va.RandomCrop(size=(224,224)),
-            va.RandomRotate(degrees=10),
-            sometimes(va.HorizontalFlip()),
-        ]
-    )
     for idx,video in enumerate(videos):
         print(f"Training video #{idx+1}", flush=True)
         idx = idx + 2 # the task labels in cvat started at 2 (because I messed up number 1)
@@ -161,3 +153,17 @@ if __name__ == "__main__":
             callbacks=[tensorboard_callback],
     )
     model.save(filepath="model.keras")
+
+
+if __name__ == "__main__":
+    # Using vidaug package for video augmentation
+    sometimes = lambda aug: va.Sometimes(0.5, aug)
+    aug_seq = va.Sequential(
+        [
+            va.RandomCrop(size=(224,224)),
+            va.RandomRotate(degrees=10),
+            sometimes(va.HorizontalFlip()),
+        ]
+    )
+
+    main()
