@@ -7,3 +7,4 @@ rtv-lickometer/target
 *pycache*
 *.DS_Store
 *.mp4
+*slurm_logs*
