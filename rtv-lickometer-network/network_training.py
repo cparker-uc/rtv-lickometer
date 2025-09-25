@@ -88,6 +88,7 @@ def main():
                     elif "_step" in v.name:
                         v.assign(0)
                 aug_num_old = aug_num
+                iio.imwrite(f"augmented_videos/video{idx+1}_aug{aug_num+1}.mp4", data_inner)
             data_inner = data_inner.reshape(-1,1,1,224,224)
             # We don't want to shuffle because the temporal information in adjacent frames is important
             # So just validate on the last 20% of frames
@@ -102,27 +103,27 @@ def main():
                     class_weight={0: 1.0, 1: 10.0},
             )
 
-#       print(f"Training on full video (#{idx+1})", flush=True)
-#       for v in model.non_trainable_variables:
-#           if "cache" in v.name:
-#               v.assign(np.zeros_like(v))
-#           elif "_step" in v.name:
-#               v.assign(0)
+        print(f"Training on full video (#{idx+1})", flush=True)
+        for v in model.non_trainable_variables:
+            if "cache" in v.name:
+                v.assign(np.zeros_like(v))
+            elif "_step" in v.name:
+                v.assign(0)
 
-#       # Perform the sequence of augmentations and stack to a single grayscale array
-#       data = aug_seq(data)
-#       data = np.stack(data, axis=0)
-#       data = np.dot(data, [0.2989, 0.5870, 0.1140]) # grayscale
+        # Perform the sequence of augmentations and stack to a single grayscale array
+        data = aug_seq(data)
+        data = np.stack(data, axis=0)
+        data = np.dot(data, [0.2989, 0.5870, 0.1140]) # grayscale
 
-#       model.fit(
-#               data.reshape(-1,1,1,224,224),
-#               np.array(y), 
-#               epochs=1,
-#               batch_size=1,
-#               # validation_data=(valid_data, valid_y),
-#               callbacks=[tensorboard_callback],
-#               class_weight={0: 1.0, 1: 10.0},
-#       )
+        model.fit(
+                data.reshape(-1,1,1,224,224),
+                np.array(y), 
+                epochs=1,
+                batch_size=1,
+                # validation_data=(valid_data, valid_y),
+                callbacks=[tensorboard_callback],
+                class_weight={0: 1.0, 1: 10.0},
+        )
 
     # save the trained model
     if not os.path.isdir("model_checkpoints"):
@@ -164,9 +165,9 @@ if __name__ == "__main__":
             va.RandomCrop(size=(224,224)),
             va.RandomRotate(degrees=45),
             sometimes(va.HorizontalFlip()),
-            sometimes(va.VerticalFlip()),
-            sometimes(va.Pepper()),
+            # sometimes(va.VerticalFlip()),
+            # sometimes(va.Pepper()),
         ]
     )
-
+   
     main()
