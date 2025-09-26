@@ -39,7 +39,10 @@ def main():
     model = construct_model(skip_steps=100)
     model.compile(
         optimizer="adam",
-        loss=keras.losses.BinaryCrossentropy(from_logits=True,),
+        # loss=keras.losses.BinaryCrossentropy(from_logits=True,),
+        # Switching to focal cross entropy so that "easy" negative samples are given less weight
+        # (with the annotation strategy I'm using, we have many easy negatives)
+        loss=keras.losses.CategoricalFocalCrossentropy(alpha=0.75, gamma=2.0, from_logits=True),
         metrics=['accuracy', keras.metrics.AUC(name="auc")],
     )
 
