@@ -8,7 +8,8 @@ WIDTH_AXIS = 3
 HEIGHT_AXIS = 4
 
 # FILTERS = [16, 32, 64, 128]
-FILTERS = [32, 64, 128, 256]
+# FILTERS = [32, 64, 128, 256]
+FILTERS = [64, 128, 256, 512]
 SIZES = [26, 12, 5, 2]
 
 class D3DBasicBlock(keras.layers.Layer):
