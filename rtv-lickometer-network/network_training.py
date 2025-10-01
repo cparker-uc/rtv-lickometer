@@ -4,7 +4,7 @@ import datetime
 import os
 import random
 
-from d3d_network import construct_model
+from d3d_network import construct_dresnet18, construct_dresnet101
 
 import xml.etree.ElementTree as ET
 import imageio.v3 as iio
@@ -16,7 +16,7 @@ from vidaug import augmentors as va
 
 def dataset_gen(data, y):
     data_orig = copy(data)
-    for aug_num in range(50):
+    for aug_num in range(10):
         # Perform the sequence of augmentations and stack to a single grayscale array
         data = aug_seq(data_orig)
         data = np.stack(data, axis=0)
@@ -36,7 +36,7 @@ def main():
     log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     tensorboard_callback = keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
-    model = construct_model(skip_steps=100)
+    model = construct_dresnet101(skip_steps=15)
     model.compile(
         optimizer="adam",
         # loss=keras.losses.BinaryCrossentropy(from_logits=True,),
@@ -165,8 +165,8 @@ if __name__ == "__main__":
     aug_seq = va.Sequential(
         [
             va.RandomCrop(size=(224,224)),
-            va.RandomRotate(degrees=45),
-            sometimes(va.HorizontalFlip()),
+            va.RandomRotate(degrees=15),
+            # sometimes(va.HorizontalFlip()),
             # sometimes(va.VerticalFlip()),
             # sometimes(va.Pepper()),
         ]
