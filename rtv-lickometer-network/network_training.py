@@ -39,15 +39,12 @@ def main():
     model = construct_dresnet101(skip_steps=15)
     model.compile(
         optimizer="adam",
-        # loss=keras.losses.BinaryCrossentropy(from_logits=True,),
-        # Switching to focal cross entropy so that "easy" negative samples are given less weight
-        # (with the annotation strategy I'm using, we have many easy negatives)
-        loss=keras.losses.CategoricalFocalCrossentropy(alpha=0.75, gamma=2.0, from_logits=True),
+        loss=keras.losses.BinaryCrossentropy(from_logits=True,),
         metrics=['accuracy', keras.metrics.AUC(name="auc")],
     )
 
     # Load the labels
-    tree = ET.parse("finger_tap_training_data/annotations.xml")
+    tree = ET.parse("finger_tap_training_data/annotations_v1(all touching frames).xml")
     root = tree.getroot()
 
     # Frame info
@@ -98,11 +95,11 @@ def main():
             model.fit(
                     train_data.reshape(-1,1,1,224,224),
                     np.array(train_y), 
-                    epochs=1,
+                    epochs=2,
                     batch_size=1,
                     validation_data=(valid_data.reshape(-1,1,1,224,224), valid_y),
                     callbacks=[tensorboard_callback],
-                    # class_weight={0: 1.0, 1: 100.0},
+                    class_weight={0: 1.0, 1: 10.0},
             )
 
         print(f"Training on full video (#{idx+1})", flush=True)
