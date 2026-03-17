@@ -53,8 +53,10 @@ mod style;
 /// immediately each loop).
 pub struct GuiApp {
     selection: (u32, u32),
+    focus_val: f32,
     rx: Option<crossbeam_channel::Receiver<Vec<u8>>>,
     tx_r: Option<Sender<(u32, u32)>>, // for transmitting selected ROI back
+    tx_f: Option<Sender<f32>>, // for sending new focus val
     tex: Option<TextureHandle>,
     //last_frame_at: Instant, // Track when the previous frame was captured
     cam_thread: Option<JoinHandle<()>>, // Ensure that we have wrapped up the camera work before closing
@@ -73,21 +75,30 @@ impl GuiApp {
         // Here, the channel will pass a tuple of u32s (x,y).
         let (tx_r, rx_r) = channel::<(u32, u32)>();
 
+        // Spawn a channel for setting camera focus
+        let (tx_f, rx_f) = channel::<f32>();
+
         // Start with selection at origin
         let roi_selection = (0u32, 0u32);
+
+        // Start with focus in the middle
+        let focus_val = 0.5;
 
         // Start the camera stream for the GUI
         let cam_thread = thread::spawn(move || {
             // Initialize a new default Config
-            let user_conf: Config = Config::default();
+            let mut user_conf: Config = Config::default();
+            user_conf.set_focus(focus_val);
 
-            gui_stream(user_conf, tx, rx_r);
+            gui_stream(user_conf, tx, rx_r, rx_f);
         });
 
         Self {
             selection: roi_selection,
+            focus_val,
             rx: Some(rx),
             tx_r: Some(tx_r),
+            tx_f: Some(tx_f),
             tex: None,
             //last_frame_at: Instant::now(),
             cam_thread: Some(cam_thread),
@@ -153,6 +164,13 @@ impl GuiApp {
                 let p = ui.painter();
                 p.rect_stroke(roi_rect, 3.0, Stroke::new(4.0, Color32::RED));
 
+                // Focus slider
+                if ui.add(egui::Slider::new(&mut self.focus_val, 0.0..=1.0).text("Camera Focus Slider")).changed() {
+                    if let Some(tx_f) = self.tx_f.as_ref() {
+                        let _ = tx_f.send(self.focus_val);
+                    }
+                }
+
                 // On confirm button click, we compute the top left of the user-selected ROI
                 // (this involves subtracting off the top left of the frame to handle padding
                 // in the GUI). Then we send this over the tx_r channel to the camera thread.
@@ -178,12 +196,13 @@ impl GuiApp {
     }
 
     /// Once the ROI is selected, wrap things up and start recording
-    fn roi_selection_wrapup(&mut self, _ctx: &egui::Context) {
+    fn roi_selection_wrapup(&mut self, _ctx: &egui::Context, focus_val: f32) {
         // Once gui_stream exits, set the ROI that was returned
         // and start recording.
         let mut user_conf = Config::default();
         let (x,y) = self.selection;
         user_conf.set_roi(x, y);
+        user_conf.set_focus(focus_val);
 
         self.filename = Some(user_conf.filename.to_owned());
 
@@ -265,7 +284,7 @@ impl eframe::App for GuiApp {
         // If the camera thread isn't set anymore, wrap up the ROI selection
         // and start the recording thread
         if self.cam_thread.is_none() {
-            self.roi_selection_wrapup(ctx);
+            self.roi_selection_wrapup(ctx, self.focus_val);
             return;
         }
 

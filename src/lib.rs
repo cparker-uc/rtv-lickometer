@@ -44,6 +44,7 @@ pub struct Config {
     crop_x: u32,
     crop_y: u32,
     roi_selected: bool, // flag to track if we are in selection GUI
+    focus: f32,
 }
 
 impl Config {
@@ -52,6 +53,10 @@ impl Config {
         self.crop_x = crop_x;
         self.crop_y = crop_y;
         self.roi_selected = true;
+    }
+
+    pub fn set_focus(&mut self, focus_val: f32) {
+        self.focus = focus_val;
     }
 }
 
@@ -63,6 +68,7 @@ impl Default for Config {
         let crop_x: u32 = 774;
         let crop_y: u32 = 520;
         let roi_selected: bool = false;
+        let focus: f32 = 0.5;
 
         // Filename is required, starts empty
         let hostname = hostname::get()
@@ -72,7 +78,7 @@ impl Default for Config {
         let date = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
         let filename = format!("{}_{}.mp4", hostname, date);
 
-        Self { filename, crop_x, crop_y, roi_selected }
+        Self { filename, crop_x, crop_y, roi_selected, focus }
     }
 
 }

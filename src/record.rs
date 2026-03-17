@@ -42,7 +42,7 @@ use std::{
 const PIXEL_FORMAT_YU12: PixelFormat = PixelFormat::new(u32::from_le_bytes([b'Y', b'U', b'1', b'2']), 0);
 
 /// Stream to the egui GUI for ROI selection
-pub fn gui_stream(user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_r: Receiver<(u32, u32)>) -> (u32, u32) {
+pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_r: Receiver<(u32, u32)>, rx_f: Receiver<f32>) -> (u32, u32) {
     // Interface for choosing a camera
     let cm = CameraManager::new().unwrap();
 
@@ -158,6 +158,16 @@ pub fn gui_stream(user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8
         }
         // Check the channel for a message, timeout after 2 seconds
         let mut req = rx.recv_timeout(Duration::from_secs(2)).expect("Camera request failed");
+
+        // Check for user-specified focus
+        let focus_val = rx_f.try_recv();
+        if let Ok(f) = focus_val {
+            user_conf.set_focus(f);
+            let focus_val: f32 = user_conf.focus * 16.0;
+            let current_controls = req.controls_mut();
+            current_controls.set(controls::LensPosition(focus_val)).unwrap();
+            println!("{current_controls:#?}");
+        }
 
         // Get framebuffer for the stream
         let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&stream).unwrap();
@@ -276,7 +286,6 @@ pub fn record(user_conf: &Config) {
     // Callback executed when frame is captured
     cam.on_request_completed(move |req: Request| {
         if req.status() == RequestStatus::Complete {
-            // Where we would have polled the IMX500 NPU results
         }
         tx.send(req).unwrap();
     });
@@ -294,7 +303,7 @@ pub fn record(user_conf: &Config) {
     ffmpeg_cmd
         .args(["-pix_fmt", "yuv420p"])
         .args(["-f", "rawvideo"])
-        .args(["-framerate", "30"])
+        .args(["-framerate", "56"]) // Remember to change this when setting framerate!
         // using training crop for now when saving
         .args(["-s", format!("{}x{}", TRAINING_CROP_W, TRAINING_CROP_H).as_str()])
         .args(["-i", "pipe:0"])
@@ -347,6 +356,7 @@ pub fn record(user_conf: &Config) {
         // Send over the pipe to ffmpeg
         writer.write_all(&cropped_planes[..]).expect("Couldn't write frame to ffmpeg pipe");
 
+
         // Reuse the buffers so we don't have to reallocate every frame
         req.reuse(ReuseFlag::REUSE_BUFFERS);
         cam.queue_request(req).unwrap();
@@ -362,8 +372,11 @@ fn global_config(_user_conf: &Config) -> UniquePtr<ControlList> {
     let frame_duration = (1_000_000.0 / target_fps) as i64;
 
     globals.set(controls::FrameDurationLimits([frame_duration, frame_duration])).unwrap();
-    globals.set(controls::AfMode::Continuous).unwrap();
+    globals.set(controls::AfMode::Manual).unwrap();
     globals.set(controls::AfRange::Macro).unwrap();
+
+    let focus_val: f32 = _user_conf.focus * 16.0;
+    globals.set(controls::LensPosition(focus_val)).unwrap();
 
     globals
 }
@@ -404,7 +417,6 @@ fn crop_frame(planes: Vec<&[u8]>, y_stride: usize, user_conf: &Config) -> Vec<u8
         x = x_tmp;
         let y_tmp = ((RAW_H - FIRST_CROP_H) / 2) as usize;
         y = y_tmp;
-        println!("x:{}, y:{}", x, y);
     }
     // planes contains Y, U, and V planes. Y is double the height/width and stride
     let y_plane = planes[0];
@@ -444,4 +456,8 @@ fn crop_frame(planes: Vec<&[u8]>, y_stride: usize, user_conf: &Config) -> Vec<u8
         out.extend_from_slice(&v_plane[row_start_idx..row_start_idx + uvw]);
     }
     out
+}
+
+pub fn set_focus() -> Result<(), String> {
+    Ok(())
 }
