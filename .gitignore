@@ -1,1 +1,10 @@
-/target
+rtv-lickometer-network/finger_tap_training_data/
+rtv-lickometer-network/quinine_drinking_training_data/
+rtv-lickometer-network/model_checkpoints/
+rtv-lickometer-network/logs/
+rtv-lickometer-training/target
+rtv-lickometer/target
+*pycache*
+*.DS_Store
+*.mp4
+*slurm_logs*
