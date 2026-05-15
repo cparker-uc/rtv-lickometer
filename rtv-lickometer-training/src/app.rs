@@ -108,18 +108,7 @@ impl GuiApp {
     }
 
     /// Until we select the ROI, display a stream of the video
-    fn video_player(&mut self, ctx: &egui::Context, latest: Vec<u8>) {
-        // Create or update texture.
-        let size = [FIRST_CROP_W as usize, FIRST_CROP_H as usize];
-        let image = ColorImage::from_rgba_unmultiplied(size, &latest);
-        if let Some(tex) = &mut self.tex {
-            tex.set(image, TextureOptions::default());
-        } else {
-            self.tex = Some(ctx.load_texture("stream", image, egui::TextureOptions::LINEAR));
-        }
-        //self.last_frame_at = Instant::now();
-        ctx.request_repaint();
-
+    fn video_player(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
             .frame(style::set_frame_margins(ctx))
             .show(ctx, |ui| {
@@ -302,15 +291,22 @@ impl eframe::App for GuiApp {
             latest = Some(f);
         }
         // If we can convert to RGBA, render the latest frame
-        if let Some(latest) = convert_to_rgba(latest){
-            self.video_player(ctx, latest);
-            // Check tx_r now, and return early to skip replacing rx
-            // if tx_r is gone
-            if self.tx_r.is_none() { return; }
-        } else {
-            // No frame this tick; to avoid busy-looping, request a repaint soon.
-            ctx.request_repaint_after(Duration::from_millis(10));
-        }
+        if let Some(rgba) = convert_to_rgba(latest){
+            let size = [FIRST_CROP_W as usize, FIRST_CROP_H as usize];
+            let image = ColorImage::from_rgba_unmultiplied(size, &rgba);
+            if let Some(tex) = &mut self.tex {
+                tex.set(image, TextureOptions::default());
+            } else {
+                self.tex = Some(ctx.load_texture("stream", image, TextureOptions::LINEAR));
+            }
+        } 
+
+        self.video_player(ctx);
+
+        // Check tx_r now, and return early to skip replacing rx
+        // if tx_r is gone
+        if self.tx_r.is_none() { return; }
+        ctx.request_repaint_after(Duration::from_millis(10));
 
         // return the receiver to its Option
         self.rx = Some(rx);
