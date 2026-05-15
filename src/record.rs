@@ -159,16 +159,6 @@ pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Ve
         // Check the channel for a message, timeout after 2 seconds
         let mut req = rx.recv_timeout(Duration::from_secs(2)).expect("Camera request failed");
 
-        // Check for user-specified focus
-        let focus_val = rx_f.try_recv();
-        if let Ok(f) = focus_val {
-            user_conf.set_focus(f);
-            let focus_val: f32 = user_conf.focus * 16.0;
-            let current_controls = req.controls_mut();
-            current_controls.set(controls::LensPosition(focus_val)).unwrap();
-            println!("{current_controls:#?}");
-        }
-
         // Get framebuffer for the stream
         let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&stream).unwrap();
 
@@ -181,7 +171,19 @@ pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Ve
 
         let _ = stream_tx.try_send(cropped_planes);
 
+        //println!("{:#?}", req.metadata());
         req.reuse(ReuseFlag::REUSE_BUFFERS);
+
+        // Check for user-specified focus
+        let focus_val = rx_f.try_recv();
+        if let Ok(f) = focus_val {
+            user_conf.set_focus(f);
+        }
+        let focus_val: f32 = user_conf.focus * 16.0;
+        let current_controls = req.controls_mut();
+
+        current_controls.set(controls::LensPosition(focus_val)).expect("Couldn't set focus");
+
         cam.queue_request(req).unwrap();
     }
     (crop_x, crop_y)
