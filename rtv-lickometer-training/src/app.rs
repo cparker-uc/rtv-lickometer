@@ -49,6 +49,7 @@ pub struct GuiApp {
     focus_val: f32,
     rx: Option<crossbeam_channel::Receiver<Vec<u8>>>, // for video frames
     tx_f: Option<Sender<f32>>, // for sending new focus val
+    tx_c: Option<Sender<u32>>, // for sending confirm button click
     tex: Option<TextureHandle>,
     cam_thread: Option<JoinHandle<()>>, // Ensure that we have wrapped up the camera work before closing
                                 // GUI
@@ -64,6 +65,9 @@ impl GuiApp {
         // Spawn a channel for setting camera focus
         let (tx_f, rx_f) = channel::<f32>();
 
+        // Spawn a channel for sending confirm button click
+        let (tx_c, rx_c) = channel::<u32>();
+
         // Start with focus in the middle
         let focus_val = 0.5;
 
@@ -73,13 +77,14 @@ impl GuiApp {
             let mut user_conf: Config = Config::default();
             user_conf.set_focus(focus_val);
 
-            gui_stream(user_conf, tx, rx_f);
+            gui_stream(user_conf, tx, rx_f, rx_c);
         });
 
         Self {
             focus_val,
             rx: Some(rx),
             tx_f: Some(tx_f),
+            tx_c: Some(tx_c),
             tex: None,
             cam_thread: Some(cam_thread),
             filename: None,
@@ -94,7 +99,7 @@ impl GuiApp {
             .show(ctx, |ui| {
             if let Some(tex) = &self.tex {
                 // Fit while preserving aspect ratio.
-                let curr_frame = ui.image((tex.id(), tex.size_vec2()));
+                ui.image((tex.id(), tex.size_vec2()));
 
                 // Focus slider
                 if ui.add(egui::Slider::new(&mut self.focus_val, 0.0..=1.0).text("Camera Focus Slider")).changed() {
@@ -107,6 +112,11 @@ impl GuiApp {
                     // Wrap up the camera work
                     let cam_thread = self.cam_thread.take().unwrap();
                     cam_thread.join().expect("Couldn't join camera thread");
+
+                    println!("Here");
+                    let tx_c = self.tx_c.take().unwrap();
+                    tx_c.send(1).unwrap();
+                    drop(tx_c);
                     
                     // Shrink the window somewhat, it doesn't need as much real-estate now
                     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(480.0, 360.0)));

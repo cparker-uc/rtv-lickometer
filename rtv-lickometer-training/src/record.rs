@@ -40,7 +40,7 @@ use std::{
 const PIXEL_FORMAT_YU12: PixelFormat = PixelFormat::new(u32::from_le_bytes([b'Y', b'U', b'1', b'2']), 0);
 
 /// Stream to the egui GUI for camera aiming and focus selection
-pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_f: Receiver<f32>) {
+pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_f: Receiver<f32>, rx_c: Receiver<u32>) {
     // Interface for choosing a camera
     let cm = CameraManager::new().unwrap();
 
@@ -74,7 +74,7 @@ pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Ve
     //  - 2304x1296 @ 30  Hz
     //  - 1536x864  @ 120 Hz
     let cfg = &mut cfgs.get_mut(0).unwrap();
-    cfg.set_size(Size { width: 1536, height: 864 });
+    cfg.set_size(Size { width: RAW_W, height: RAW_H });
     
     // Validate config
     match cfgs.validate() {
@@ -95,9 +95,6 @@ pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Ve
     // CameraConfiguration, then access the underlying Stream object
     let cfg = &cfgs.get(0).unwrap();
     let stream = cfg.stream().unwrap();
-
-    // Determine stride of Y plane (should be padded a bit from 2028)
-    let y_stride: u32 = cfg.get_stride();
 
     // Allocate memory for the necessary FrameBuffers
     let bufs = alloc.alloc(&stream).unwrap();
@@ -145,6 +142,11 @@ pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Ve
     }
     // Main loop, loops until user interrupt
     loop {
+        // Check if the user clicked the confirm button yet, break if so
+        if let Ok(_) = rx_c.try_recv() {
+            println!("Confirm clicked");
+            break;
+        }
         // Check the channel for a message, timeout after 2 seconds
         let mut req = rx.recv_timeout(Duration::from_secs(2)).expect("Camera request failed");
 
@@ -233,9 +235,6 @@ pub fn record(user_conf: &Config) {
     // CameraConfiguration, then access the underlying Stream object
     let cfg = &cfgs.get(0).unwrap();
     let stream = cfg.stream().unwrap();
-
-    // Determine stride of Y plane (should be padded a bit from 2028)
-    let y_stride: u32 = cfg.get_stride();
 
     // Allocate memory for the necessary FrameBuffers
     let bufs = alloc.alloc(&stream).unwrap();
@@ -355,7 +354,7 @@ pub fn record(user_conf: &Config) {
 fn global_config(_user_conf: &Config) -> UniquePtr<ControlList> {
     let mut globals = ControlList::new();
 
-    let target_fps = 56.0;
+    let target_fps = 120.0;
     let frame_duration = (1_000_000.0 / target_fps) as i64;
 
     globals.set(controls::FrameDurationLimits([frame_duration, frame_duration])).unwrap();

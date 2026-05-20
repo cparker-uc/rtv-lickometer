@@ -6,8 +6,8 @@ pub mod record;
 pub const RAW_W: u32 = 1536;
 pub const RAW_H: u32 = 864;
 // Raw planes will have 10px padding on left/right
-pub const BYTES_PER_RAW_Y_PLANE: usize = ((RAW_W + 20) * RAW_H) as usize;
-pub const BYTES_PER_RAW_UV_PLANE: usize = ((RAW_W + 20) / 2 * RAW_H / 2) as usize;
+pub const BYTES_PER_RAW_Y_PLANE: usize = (RAW_W * RAW_H) as usize;
+pub const BYTES_PER_RAW_UV_PLANE: usize = (RAW_W / 2 * RAW_H / 2) as usize;
 pub const BYTES_PER_RAW_FRAME: usize = BYTES_PER_RAW_Y_PLANE + 2 * BYTES_PER_RAW_UV_PLANE;
 
 /// Contains various user-exposed configuration options
