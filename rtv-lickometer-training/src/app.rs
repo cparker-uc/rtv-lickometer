@@ -109,13 +109,15 @@ impl GuiApp {
                 }
 
                 if ui.button("Start Recording").clicked() {
+
+                    // Tell the recording thread we are ready to start
+                    let tx_c = self.tx_c.take().unwrap();
+                    tx_c.send(1).unwrap();
+
                     // Wrap up the camera work
                     let cam_thread = self.cam_thread.take().unwrap();
                     cam_thread.join().expect("Couldn't join camera thread");
 
-                    println!("Here");
-                    let tx_c = self.tx_c.take().unwrap();
-                    tx_c.send(1).unwrap();
                     drop(tx_c);
                     
                     // Shrink the window somewhat, it doesn't need as much real-estate now
@@ -233,6 +235,9 @@ impl eframe::App for GuiApp {
         } 
 
         self.video_player(ctx);
+
+        // Check if we pressed confirm last update and return if so
+        if self.tx_c.is_none() { return; }
 
         ctx.request_repaint_after(Duration::from_millis(10));
 

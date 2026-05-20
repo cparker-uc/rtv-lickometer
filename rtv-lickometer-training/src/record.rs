@@ -214,7 +214,7 @@ pub fn record(user_conf: &Config) {
     //  - 2304x1296 @ 30  Hz
     //  - 1536x864  @ 120 Hz
     let cfg = &mut cfgs.get_mut(0).unwrap();
-    cfg.set_size(Size { width: 2304, height: 1296 });
+    cfg.set_size(Size { width: RAW_W, height: RAW_H });
     
     // Validate config
     match cfgs.validate() {
@@ -291,9 +291,10 @@ pub fn record(user_conf: &Config) {
     ffmpeg_cmd
         .args(["-pix_fmt", "yuv420p"])
         .args(["-f", "rawvideo"])
-        .args(["-framerate", "120"]) // Remember to change this when setting framerate!
+        .args(["-framerate", "90"]) // This was set empirically based on the desired res
         .args(["-s", format!("{}x{}", RAW_W, RAW_H).as_str()])
         .args(["-i", "pipe:0"])
+        .args(["-preset", "ultrafast"]) // big improvement to framerate
         .arg(&user_conf.filename)
         .stdin(reader); // pass the read end of the pipe
 
@@ -357,7 +358,13 @@ fn global_config(_user_conf: &Config) -> UniquePtr<ControlList> {
     let target_fps = 120.0;
     let frame_duration = (1_000_000.0 / target_fps) as i64;
 
+    // Trying to target the correct framerate, need to disable autoexposure timing
+    // as that slows things down in dim light
     globals.set(controls::FrameDurationLimits([frame_duration, frame_duration])).unwrap();
+    //globals.set(controls::AeEnable(false)).unwrap();
+    //globals.set(controls::ExposureTime(6000)).unwrap();
+
+    // Disable autofocus and enable macro focus mode
     globals.set(controls::AfMode::Manual).unwrap();
     globals.set(controls::AfRange::Macro).unwrap();
 
