@@ -4,8 +4,6 @@ use crate::{
     // Constants
     RAW_W, RAW_H,
     BYTES_PER_RAW_FRAME,
-    FIRST_CROP_W, FIRST_CROP_H, // intermediate crop size for GUI
-    TRAINING_CROP_W, TRAINING_CROP_H, // crop with padding for training wiggle
 };
 use crossbeam_channel;
 use libcamera::{
@@ -41,8 +39,8 @@ use std::{
 // an enum variant for MJPEG, so we construct it manually from the raw fourcc identifier
 const PIXEL_FORMAT_YU12: PixelFormat = PixelFormat::new(u32::from_le_bytes([b'Y', b'U', b'1', b'2']), 0);
 
-/// Stream to the egui GUI for ROI selection
-pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_r: Receiver<(u32, u32)>, rx_f: Receiver<f32>) -> (u32, u32) {
+/// Stream to the egui GUI for camera aiming and focus selection
+pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Vec<u8>>, rx_f: Receiver<f32>) {
     // Interface for choosing a camera
     let cm = CameraManager::new().unwrap();
 
@@ -146,16 +144,7 @@ pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Ve
         cam.queue_request(req).unwrap();
     }
     // Main loop, loops until user interrupt
-    let crop_x: u32;
-    let crop_y: u32;
     loop {
-        // First, check if the user selected the ROI yet (try_recv so we don't block)
-        if let Ok((x,y)) = rx_r.try_recv() {
-            println!("ROI selection received: x: {x}, y: {y}");       
-            crop_x = x;
-            crop_y = y;
-            break;
-        }
         // Check the channel for a message, timeout after 2 seconds
         let mut req = rx.recv_timeout(Duration::from_secs(2)).expect("Camera request failed");
 
@@ -167,9 +156,8 @@ pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Ve
         for p in &planes {
             raw_planes.extend_from_slice(p);
         }
-        let cropped_planes: Vec<u8> = crop_frame(planes, y_stride as usize, &user_conf);
 
-        let _ = stream_tx.try_send(cropped_planes);
+        let _ = stream_tx.try_send(raw_planes);
 
         //println!("{:#?}", req.metadata());
         req.reuse(ReuseFlag::REUSE_BUFFERS);
@@ -186,7 +174,6 @@ pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Ve
 
         cam.queue_request(req).unwrap();
     }
-    (crop_x, crop_y)
 }
 
 /// Set camera configuration based on user_conf, allocate memory,
@@ -306,8 +293,7 @@ pub fn record(user_conf: &Config) {
         .args(["-pix_fmt", "yuv420p"])
         .args(["-f", "rawvideo"])
         .args(["-framerate", "120"]) // Remember to change this when setting framerate!
-        // using training crop for now when saving
-        .args(["-s", format!("{}x{}", TRAINING_CROP_W, TRAINING_CROP_H).as_str()])
+        .args(["-s", format!("{}x{}", RAW_W, RAW_H).as_str()])
         .args(["-i", "pipe:0"])
         .arg(&user_conf.filename)
         .stdin(reader); // pass the read end of the pipe
@@ -351,12 +337,11 @@ pub fn record(user_conf: &Config) {
         // Get framebuffer for the stream
         let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&stream).unwrap();
 
-        // Pull out the data and crop the frame
         let planes: Vec<&[u8]> = framebuffer.data();
-        let cropped_planes: Vec<u8> = crop_frame(planes, y_stride as usize, user_conf);
+        let contiguous_planes: Vec<u8> = planes[..].concat();
 
         // Send over the pipe to ffmpeg
-        writer.write_all(&cropped_planes[..]).expect("Couldn't write frame to ffmpeg pipe");
+        writer.write_all(&contiguous_planes).expect("Couldn't write frame to ffmpeg pipe");
 
 
         // Reuse the buffers so we don't have to reallocate every frame
@@ -381,85 +366,4 @@ fn global_config(_user_conf: &Config) -> UniquePtr<ControlList> {
     globals.set(controls::LensPosition(focus_val)).unwrap();
 
     globals
-}
-
-/// Handles frame cropping (for saving or streaming). Needs y_stride from the original Y plane,
-/// so that we can account for the zero padding on left/right that the camera does
-fn crop_frame(planes: Vec<&[u8]>, y_stride: usize, user_conf: &Config) -> Vec<u8> {
-    let w: usize;
-    let h: usize;
-    let mut x: usize;
-    let mut y: usize;
-    if user_conf.roi_selected {
-        // At least for now, we save with 100 px padding around the edges for 
-        // use in training
-        w = TRAINING_CROP_W as usize;
-        h = TRAINING_CROP_H as usize;
-        // Make sure the user-defined crop is an even number of pixels in both axes
-        x = (user_conf.crop_x & !1) as usize;
-        y = (user_conf.crop_y & !1) as usize;
-
-        // During the training crop, we need to adjust x and y to account for the
-        // padding. 100 px => decrease x and y by 50 px each. We also need to account
-        // for the pixels missing due to the intermediate crop, so we end up with
-        // for example:
-        // x: 2304 - 480 = 1980 / 2 = 990 - 50 = 940
-        // y: 1296 - 480 = 972 / 2 = 486 - 50 = 436
-        // Note that we still compute the x_tmp and y_tmp from the
-        // origin of the FIRST_CROP, rather than TRAINING_CROP
-        let x_tmp = (((RAW_W - FIRST_CROP_W) / 2) - 50) as usize;
-        x += x_tmp;
-        let y_tmp = (((RAW_H - FIRST_CROP_H) / 2) - 50) as usize;
-        y += y_tmp;
-    } else { // if we haven't selected the ROI yet, don't crop as far
-        w = FIRST_CROP_W as usize;
-        h = FIRST_CROP_H as usize;
-        // If we haven't set the ROI yet, default to 480x480 in the center of the frame
-        let x_tmp = ((RAW_W - FIRST_CROP_W) / 2) as usize;
-        x = x_tmp;
-        let y_tmp = ((RAW_H - FIRST_CROP_H) / 2) as usize;
-        y = y_tmp;
-    }
-    // planes contains Y, U, and V planes. Y is double the height/width and stride
-    let y_plane = planes[0];
-    let u_plane = planes[1];
-    let v_plane = planes[2];
-
-
-    // Define the UV coords (half the size)
-    let uvx: usize = x / 2;
-    let uvy: usize = y / 2;
-    let uvw: usize = w / 2;
-    let uvh: usize = h / 2;
-
-    // Length of each row in the planes
-    let uv_stride: usize = y_stride / 2;
-
-    // Determine new plane sizes
-    let y_size: usize = w * h;
-    let uv_size: usize = uvw * uvh;
-
-    // Output vector
-    let mut out: Vec<u8> = Vec::with_capacity(y_size + 2 * uv_size);
-
-    // Crop Y
-    for row in 0..h {
-        let row_start_idx = (y + row) * y_stride + x;
-        out.extend_from_slice(&y_plane[row_start_idx..row_start_idx + w]);
-    }
-
-    // Crop U & V
-    for row in 0..uvh {
-        let row_start_idx = (uvy + row) * uv_stride + uvx;
-        out.extend_from_slice(&u_plane[row_start_idx..row_start_idx + uvw]);
-    }
-    for row in 0..uvh {
-        let row_start_idx = (uvy + row) * uv_stride + uvx;
-        out.extend_from_slice(&v_plane[row_start_idx..row_start_idx + uvw]);
-    }
-    out
-}
-
-pub fn set_focus() -> Result<(), String> {
-    Ok(())
 }

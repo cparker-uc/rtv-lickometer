@@ -10,49 +10,15 @@ pub const BYTES_PER_RAW_Y_PLANE: usize = ((RAW_W + 20) * RAW_H) as usize;
 pub const BYTES_PER_RAW_UV_PLANE: usize = ((RAW_W + 20) / 2 * RAW_H / 2) as usize;
 pub const BYTES_PER_RAW_FRAME: usize = BYTES_PER_RAW_Y_PLANE + 2 * BYTES_PER_RAW_UV_PLANE;
 
-// Intermediate crop size (for allowing the user to select the crop rectangle)
-pub const FIRST_CROP_W: u32 = 900;
-pub const FIRST_CROP_H: u32 = 750;
-pub const BYTES_PER_FIRST_CROP_Y_PLANE: usize = (FIRST_CROP_W * FIRST_CROP_H) as usize;
-pub const BYTES_PER_FIRST_CROP_UV_PLANE: usize = (FIRST_CROP_W / 2 * FIRST_CROP_H / 2) as usize;
-pub const BYTES_PER_FIRST_CROP_FRAME: usize = BYTES_PER_FIRST_CROP_Y_PLANE + 2 * BYTES_PER_FIRST_CROP_UV_PLANE;
-
-// Training crop size (100 px padded width/height so we can jitter the ROI in network
-// training)
-pub const TRAINING_CROP_W: u32 = 900;
-pub const TRAINING_CROP_H: u32 = 750;
-pub const BYTES_PER_TRAINING_CROP_Y_PLANE: usize = (TRAINING_CROP_W * TRAINING_CROP_H) as usize;
-pub const BYTES_PER_TRAINING_CROP_UV_PLANE: usize = (TRAINING_CROP_W / 2 * TRAINING_CROP_H / 2) as usize;
-pub const BYTES_PER_TRAINING_CROP_FRAME: usize = BYTES_PER_TRAINING_CROP_Y_PLANE + 2 * BYTES_PER_TRAINING_CROP_UV_PLANE;
-
-// Final crop size
-pub const CROP_W: u32 = 900;
-pub const CROP_H: u32 = 750;
-pub const BYTES_PER_CROPPED_Y_PLANE: usize = (CROP_W * CROP_H) as usize;
-pub const BYTES_PER_CROPPED_UV_PLANE: usize = (CROP_W / 2 * CROP_H / 2) as usize;
-pub const BYTES_PER_CROPPED_FRAME: usize = BYTES_PER_CROPPED_Y_PLANE + 2 * BYTES_PER_CROPPED_UV_PLANE;
-
-
 /// Contains various user-exposed configuration options
 ///
-/// Currently only filename and crop rectangle, likely will add more later
+/// Currently only filename and camera focus, likely will add more later
 pub struct Config {
     filename: String,
-    //cnn_path: 
-    crop_x: u32,
-    crop_y: u32,
-    roi_selected: bool, // flag to track if we are in selection GUI
     focus: f32,
 }
 
 impl Config {
-    /// Allow the user to set the crop
-    pub fn set_roi(&mut self, crop_x: u32, crop_y: u32) {
-        self.crop_x = crop_x;
-        self.crop_y = crop_y;
-        self.roi_selected = true;
-    }
-
     pub fn set_focus(&mut self, focus_val: f32) {
         self.focus = focus_val;
     }
@@ -61,9 +27,6 @@ impl Config {
 impl Default for Config {
     /// Initialize the configuration with a descriptive filename and default crop
     fn default() -> Self {
-        let crop_x: u32 = 840;
-        let crop_y: u32 = 840;
-        let roi_selected: bool = false;
         let focus: f32 = 0.5;
 
         // Filename is required, starts empty
@@ -74,7 +37,7 @@ impl Default for Config {
         let date = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
         let filename = format!("{}_{}.mp4", hostname, date);
 
-        Self { filename, crop_x, crop_y, roi_selected, focus }
+        Self { filename, focus }
     }
 
 }
