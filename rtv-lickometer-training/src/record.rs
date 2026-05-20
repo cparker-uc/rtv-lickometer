@@ -76,7 +76,7 @@ pub fn gui_stream(mut user_conf: Config, stream_tx: crossbeam_channel::Sender<Ve
     //  - 2304x1296 @ 30  Hz
     //  - 1536x864  @ 120 Hz
     let cfg = &mut cfgs.get_mut(0).unwrap();
-    cfg.set_size(Size { width: 2304, height: 1296 });
+    cfg.set_size(Size { width: 1536, height: 864 });
     
     // Validate config
     match cfgs.validate() {
@@ -305,7 +305,7 @@ pub fn record(user_conf: &Config) {
     ffmpeg_cmd
         .args(["-pix_fmt", "yuv420p"])
         .args(["-f", "rawvideo"])
-        .args(["-framerate", "56"]) // Remember to change this when setting framerate!
+        .args(["-framerate", "120"]) // Remember to change this when setting framerate!
         // using training crop for now when saving
         .args(["-s", format!("{}x{}", TRAINING_CROP_W, TRAINING_CROP_H).as_str()])
         .args(["-i", "pipe:0"])
